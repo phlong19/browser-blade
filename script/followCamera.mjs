@@ -56,6 +56,7 @@ export class FollowCamera extends Script {
 
   initialize() {
     this.offset = new Vec3();
+    this.didWarnMissingTarget = false;
 
     this.initializeOrbitFromPlacement();
 
@@ -76,13 +77,17 @@ export class FollowCamera extends Script {
     }
 
     this.yaw -= event.dx * this.sensitivity;
-    this.elevation -= event.dy * this.sensitivity;
+    this.elevation += event.dy * this.sensitivity;
 
     this.clampElevation();
   }
 
   postUpdate() {
     if (!this.target) {
+      this.warnOnce(
+        "didWarnMissingTarget",
+        "Assign FollowCamera.target to the Player or CameraTarget entity.",
+      );
       return;
     }
 
@@ -159,5 +164,21 @@ export class FollowCamera extends Script {
     );
 
     return Math.asin(normalizedOffsetY) * RAD_TO_DEG;
+  }
+
+  destroy() {
+    this.app.mouse.off(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
+
+    this.app.mouse.off(Mouse.EVENT_MOUSEDOWN, this.onMouseDown, this);
+  }
+
+  warnOnce(flagName, message) {
+    if (this[flagName]) {
+      return;
+    }
+
+    this[flagName] = true;
+
+    console.warn(message);
   }
 }

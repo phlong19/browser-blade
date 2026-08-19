@@ -10,6 +10,7 @@ import {
 } from "playcanvas";
 
 const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
 
 export class PlayerController extends Script {
   static scriptName = "playerController";
@@ -92,12 +93,25 @@ export class PlayerController extends Script {
 
     this.velocity = new Vec3();
 
+    this.viewDirection = new Vec3();
+
+    this.cameraOffset = new Vec3();
+
+    this.didWarnMissingVisualRoot = false;
+    this.didWarnMissingFollowCamera = false;
+    this.didWarnMissingRigidbody = false;
+
     // Current animation-tree position.
     this.animMoveX = 0;
     this.animMoveZ = 0;
   }
 
   update(dt) {
+    if (!this.entity.rigidbody) {
+      this.warnOnce("didWarnMissingRigidbody", "PlayerController requires a Rigidbody.");
+      return;
+    }
+
     const keyboard = this.app.keyboard;
 
     // ----------------------------
@@ -147,11 +161,7 @@ export class PlayerController extends Script {
     // LOCAL CHARACTER AXES
     // ----------------------------
 
-    const yawRadians = this.facingYaw * DEG_TO_RAD;
-
-    this.forward.set(-Math.sin(yawRadians), 0, -Math.cos(yawRadians));
-
-    this.right.set(Math.cos(yawRadians), 0, -Math.sin(yawRadians));
+    this.updateFacingAxes();
 
     // ----------------------------
     // MOVEMENT
@@ -182,13 +192,7 @@ export class PlayerController extends Script {
 
     this.entity.rigidbody.linearVelocity = this.velocity;
 
-    if (this.visualRoot) {
-      this.visualRoot.setLocalEulerAngles(
-        0,
-        this.facingYaw + this.modelYawOffset,
-        0,
-      );
-    }
+    this.updateVisualFacing();
 
     // ----------------------------
     // ANIMATION TARGET
@@ -220,13 +224,95 @@ export class PlayerController extends Script {
   }
 
   getViewYaw() {
-    const followCameraScript = this.followCamera?.script?.followCamera;
+    const followCameraEntity = this.getFollowCameraEntity();
+    const followCameraScript = this.getFollowCameraScript(followCameraEntity);
 
     if (typeof followCameraScript?.yaw === "number") {
       return followCameraScript.yaw;
     }
 
+    if (followCameraEntity) {
+      return this.getYawFromCameraEntity(followCameraEntity, followCameraScript);
+    }
+
+    this.warnOnce(
+      "didWarnMissingFollowCamera",
+      "Assign PlayerController.followCamera to the Camera entity for camera-facing movement.",
+    );
+
     return this.facingYaw;
+  }
+
+  getFollowCameraEntity() {
+    if (this.followCamera) {
+      return this.followCamera;
+    }
+
+    return this.app.root.findByName("Camera");
+  }
+
+  getFollowCameraScript(followCameraEntity) {
+    const scripts = followCameraEntity?.script;
+
+    return scripts?.followCamera ?? scripts?.get?.("followCamera");
+  }
+
+  getYawFromCameraEntity(cameraEntity, followCameraScript) {
+    const targetEntity = followCameraScript?.target ?? this.entity;
+
+    if (targetEntity) {
+      this.cameraOffset.sub2(
+        cameraEntity.getPosition(),
+        targetEntity.getPosition(),
+      );
+      this.cameraOffset.y = 0;
+
+      if (this.cameraOffset.lengthSq() > 0.001) {
+        this.cameraOffset.normalize();
+
+        return (
+          Math.atan2(this.cameraOffset.x, this.cameraOffset.z) * RAD_TO_DEG
+        );
+      }
+    }
+
+    this.viewDirection.copy(cameraEntity.forward);
+    this.viewDirection.y = 0;
+
+    if (this.viewDirection.lengthSq() <= 0.001) {
+      return this.facingYaw;
+    }
+
+    this.viewDirection.normalize();
+
+    return Math.atan2(-this.viewDirection.x, -this.viewDirection.z) * RAD_TO_DEG;
+  }
+
+  updateFacingAxes() {
+    const yawRadians = this.facingYaw * DEG_TO_RAD;
+
+    // PlayCanvas gameplay forward is -Z when facingYaw is 0.
+    this.forward.set(-Math.sin(yawRadians), 0, -Math.cos(yawRadians));
+
+    this.right.set(Math.cos(yawRadians), 0, -Math.sin(yawRadians));
+  }
+
+  updateVisualFacing() {
+    if (!this.visualRoot) {
+      this.warnOnce(
+        "didWarnMissingVisualRoot",
+        "Assign PlayerController.visualRoot so gameplay yaw can rotate the character mesh.",
+      );
+      return;
+    }
+
+    // modelYawOffset is an imported-model visual correction only.
+    // It must not be applied to gameplay movement axes or WASD signs.
+    this.visualRoot.setLocalEulerAngles(
+      0,
+      this.facingYaw + this.modelYawOffset,
+      0,
+    );
   }
 
   updateFacingYaw(targetYaw, dt) {
@@ -271,17 +357,26 @@ export class PlayerController extends Script {
       return 0;
     }
 
-    const zSpeed =
-      inputZ >= 0
-        ? fast
-          ? this.runForwardSpeed
-          : this.walkForwardSpeed
-        : fast
-          ? this.runBackwardSpeed
-          : this.walkBackwardSpeed;
+    let zSpeed;
+
+    if (inputZ >= 0) {
+      zSpeed = fast ? this.runForwardSpeed : this.walkForwardSpeed;
+    } else {
+      zSpeed = fast ? this.runBackwardSpeed : this.walkBackwardSpeed;
+    }
 
     const xSpeed = fast ? this.strafeFastSpeed : this.strafeSlowSpeed;
 
     return (zSpeed * absZ + xSpeed * absX) / total;
+  }
+
+  warnOnce(flagName, message) {
+    if (this[flagName]) {
+      return;
+    }
+
+    this[flagName] = true;
+
+    console.warn(message);
   }
 }
