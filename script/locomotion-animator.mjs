@@ -75,6 +75,14 @@ export class LocomotionAnimator extends Script {
    */
   strafeRightFast;
 
+  /**
+   * @attribute
+   * @title Jump
+   * @type {Asset}
+   * @resource animation
+   */
+  jump;
+
   initialize() {
     const anim = this.entity.anim;
 
@@ -158,12 +166,33 @@ export class LocomotionAnimator extends Script {
                 ],
               },
             },
+            {
+              name: "Jump",
+              speed: 1,
+              loop: false,
+            },
           ],
 
           transitions: [
             {
               from: "START",
               to: "Locomotion",
+            },
+            {
+              from: "Locomotion",
+              to: "Jump",
+              conditions: [
+                {
+                  parameterName: "jump",
+                  predicate: "EQUAL_TO",
+                  value: true,
+                },
+              ],
+            },
+            {
+              from: "Jump",
+              to: "Locomotion",
+              exitTime: 1,
             },
           ],
         },
@@ -180,6 +209,11 @@ export class LocomotionAnimator extends Script {
           name: "moveZ",
           type: "FLOAT",
           value: 0,
+        },
+        jump: {
+          name: "jump",
+          type: "TRIGGER",
+          value: false,
         },
       },
     };
@@ -220,6 +254,8 @@ export class LocomotionAnimator extends Script {
       "Locomotion.StrafeRightFast",
       this.strafeRightFast.resource,
     );
+
+    layer.assignAnimation("Jump", this.jump.resource);
   }
 
   validateAssets() {
@@ -233,6 +269,7 @@ export class LocomotionAnimator extends Script {
       ["Strafe Left Fast", this.strafeLeftFast],
       ["Strafe Right Slow", this.strafeRightSlow],
       ["Strafe Right Fast", this.strafeRightFast],
+      ["Jump", this.jump],
     ];
 
     for (const [name, asset] of assets) {

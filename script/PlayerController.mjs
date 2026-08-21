@@ -7,6 +7,7 @@ import {
   KEY_D,
   KEY_SHIFT,
   Vec3,
+  KEY_SPACE,
 } from "playcanvas";
 
 const DEG_TO_RAD = Math.PI / 180;
@@ -57,6 +58,9 @@ export class PlayerController extends Script {
   /** @attribute @type {number} */
   strafeFastSpeed = 3;
 
+  /** @attribute @type {number} */
+  jumpSpeed = 4.5;
+
   /**
    * Degrees per second. Use 0 for immediate facing changes.
    *
@@ -97,9 +101,14 @@ export class PlayerController extends Script {
 
     this.cameraOffset = new Vec3();
 
+    this.groundCheckStart = new Vec3();
+    this.groundCheckEnd = new Vec3();
+
     this.didWarnMissingVisualRoot = false;
     this.didWarnMissingFollowCamera = false;
     this.didWarnMissingRigidbody = false;
+
+    this.isGrounded = false;
 
     // Current animation-tree position.
     this.animMoveX = 0;
@@ -108,10 +117,14 @@ export class PlayerController extends Script {
 
   update(dt) {
     if (!this.entity.rigidbody) {
-      this.warnOnce("didWarnMissingRigidbody", "PlayerController requires a Rigidbody.");
+      this.warnOnce(
+        "didWarnMissingRigidbody",
+        "PlayerController requires a Rigidbody.",
+      );
       return;
     }
 
+    this.isGrounded = this.checkGrounded();
     const keyboard = this.app.keyboard;
 
     // ----------------------------
@@ -146,6 +159,7 @@ export class PlayerController extends Script {
     }
 
     const fast = keyboard.isPressed(KEY_SHIFT) && hasMovementInput;
+    const jumpPressed = keyboard.wasPressed(KEY_SPACE);
 
     // ----------------------------
     // FACING
@@ -190,6 +204,14 @@ export class PlayerController extends Script {
     // Preserve gravity.
     this.velocity.y = currentVelocity.y;
 
+    if (jumpPressed && this.isGrounded) {
+      this.velocity.y = this.jumpSpeed;
+
+      if (this.visual?.anim) {
+        this.visual.anim.setTrigger("jump");
+      }
+    }
+
     this.entity.rigidbody.linearVelocity = this.velocity;
 
     this.updateVisualFacing();
@@ -223,6 +245,54 @@ export class PlayerController extends Script {
     }
   }
 
+  checkGrounded() {
+    const collision = this.entity.collision;
+
+    if (!collision) {
+      return false;
+    }
+
+    const position = this.entity.getPosition();
+
+    const margin = 0.08;
+
+    let bottomOffset;
+
+    if (collision.type === "capsule" && collision.axis === 1) {
+      bottomOffset = collision.linearOffset.y - collision.height * 0.5;
+    } else if (collision.type === "box") {
+      bottomOffset = collision.linearOffset.y - collision.halfExtents.y;
+    } else if (collision.type === "sphere") {
+      bottomOffset = collision.linearOffset.y - collision.radius;
+    } else {
+      console.warn(
+        `Unsupported collision setup for ground check: ${collision.type}`,
+      );
+      return false;
+    }
+
+    this.groundCheckStart.set(
+      position.x,
+      position.y + bottomOffset + margin,
+      position.z,
+    );
+
+    this.groundCheckEnd.set(
+      position.x,
+      position.y + bottomOffset - margin,
+      position.z,
+    );
+
+    const result = this.app.systems.rigidbody.raycastFirst(
+      this.groundCheckStart,
+      this.groundCheckEnd,
+      {
+        filterCallback: (entity) => entity !== this.entity,
+      },
+    );
+
+    return !!result;
+  }
   getViewYaw() {
     const followCameraEntity = this.getFollowCameraEntity();
     const followCameraScript = this.getFollowCameraScript(followCameraEntity);
@@ -232,7 +302,10 @@ export class PlayerController extends Script {
     }
 
     if (followCameraEntity) {
-      return this.getYawFromCameraEntity(followCameraEntity, followCameraScript);
+      return this.getYawFromCameraEntity(
+        followCameraEntity,
+        followCameraScript,
+      );
     }
 
     this.warnOnce(
@@ -285,7 +358,9 @@ export class PlayerController extends Script {
 
     this.viewDirection.normalize();
 
-    return Math.atan2(-this.viewDirection.x, -this.viewDirection.z) * RAD_TO_DEG;
+    return (
+      Math.atan2(-this.viewDirection.x, -this.viewDirection.z) * RAD_TO_DEG
+    );
   }
 
   updateFacingAxes() {
