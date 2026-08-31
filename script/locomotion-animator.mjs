@@ -177,10 +177,12 @@ export class LocomotionAnimator extends Script {
             {
               from: "START",
               to: "Locomotion",
+              time: 0.15,
             },
             {
               from: "Locomotion",
               to: "Jump",
+              time: 0.18,
               conditions: [
                 {
                   parameterName: "jump",
@@ -192,7 +194,8 @@ export class LocomotionAnimator extends Script {
             {
               from: "Jump",
               to: "Locomotion",
-              exitTime: 1,
+              time: 0.2,
+              exitTime: 0.9,
             },
           ],
         },
