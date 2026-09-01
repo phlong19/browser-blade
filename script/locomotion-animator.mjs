@@ -13,19 +13,11 @@ export class LocomotionAnimator extends Script {
 
   /**
    * @attribute
-   * @title Walk Forward
+   * @title Walk
    * @type {Asset}
    * @resource animation
    */
-  walkForward;
-
-  /**
-   * @attribute
-   * @title Run Forward
-   * @type {Asset}
-   * @resource animation
-   */
-  runForward;
+  walk;
 
   /**
    * @attribute
@@ -37,43 +29,19 @@ export class LocomotionAnimator extends Script {
 
   /**
    * @attribute
-   * @title Run Backward
+   * @title Strafe Left
    * @type {Asset}
    * @resource animation
    */
-  runBackward;
+  strafeLeft;
 
   /**
    * @attribute
-   * @title Strafe Left Slow
+   * @title Strafe Right
    * @type {Asset}
    * @resource animation
    */
-  strafeLeftSlow;
-
-  /**
-   * @attribute
-   * @title Strafe Left Fast
-   * @type {Asset}
-   * @resource animation
-   */
-  strafeLeftFast;
-
-  /**
-   * @attribute
-   * @title Strafe Right Slow
-   * @type {Asset}
-   * @resource animation
-   */
-  strafeRightSlow;
-
-  /**
-   * @attribute
-   * @title Strafe Right Fast
-   * @type {Asset}
-   * @resource animation
-   */
-  strafeRightFast;
+  strafeRight;
 
   /**
    * @attribute
@@ -125,13 +93,8 @@ export class LocomotionAnimator extends Script {
                   },
 
                   {
-                    name: "WalkForward",
+                    name: "Walk",
                     point: [0, 1],
-                  },
-
-                  {
-                    name: "RunForward",
-                    point: [0, 2],
                   },
 
                   {
@@ -140,28 +103,13 @@ export class LocomotionAnimator extends Script {
                   },
 
                   {
-                    name: "RunBackward",
-                    point: [0, -2],
-                  },
-
-                  {
-                    name: "StrafeLeftSlow",
+                    name: "StrafeLeft",
                     point: [-1, 0],
                   },
 
                   {
-                    name: "StrafeLeftFast",
-                    point: [-2, 0],
-                  },
-
-                  {
-                    name: "StrafeRightSlow",
+                    name: "StrafeRight",
                     point: [1, 0],
-                  },
-
-                  {
-                    name: "StrafeRightFast",
-                    point: [2, 0],
                   },
                 ],
               },
@@ -227,36 +175,16 @@ export class LocomotionAnimator extends Script {
 
     layer.assignAnimation("Locomotion.Idle", this.idle.resource);
 
-    layer.assignAnimation("Locomotion.WalkForward", this.walkForward.resource);
-
-    layer.assignAnimation("Locomotion.RunForward", this.runForward.resource);
+    layer.assignAnimation("Locomotion.Walk", this.walk.resource);
 
     layer.assignAnimation(
       "Locomotion.WalkBackward",
       this.walkBackward.resource,
     );
 
-    layer.assignAnimation("Locomotion.RunBackward", this.runBackward.resource);
+    layer.assignAnimation("Locomotion.StrafeLeft", this.strafeLeft.resource);
 
-    layer.assignAnimation(
-      "Locomotion.StrafeLeftSlow",
-      this.strafeLeftSlow.resource,
-    );
-
-    layer.assignAnimation(
-      "Locomotion.StrafeLeftFast",
-      this.strafeLeftFast.resource,
-    );
-
-    layer.assignAnimation(
-      "Locomotion.StrafeRightSlow",
-      this.strafeRightSlow.resource,
-    );
-
-    layer.assignAnimation(
-      "Locomotion.StrafeRightFast",
-      this.strafeRightFast.resource,
-    );
+    layer.assignAnimation("Locomotion.StrafeRight", this.strafeRight.resource);
 
     layer.assignAnimation("Jump", this.jump.resource);
   }
@@ -264,14 +192,10 @@ export class LocomotionAnimator extends Script {
   validateAssets() {
     const assets = [
       ["Idle", this.idle],
-      ["Walk Forward", this.walkForward],
-      ["Run Forward", this.runForward],
+      ["Walk", this.walk],
       ["Walk Backward", this.walkBackward],
-      ["Run Backward", this.runBackward],
-      ["Strafe Left Slow", this.strafeLeftSlow],
-      ["Strafe Left Fast", this.strafeLeftFast],
-      ["Strafe Right Slow", this.strafeRightSlow],
-      ["Strafe Right Fast", this.strafeRightFast],
+      ["Strafe Left", this.strafeLeft],
+      ["Strafe Right", this.strafeRight],
       ["Jump", this.jump],
     ];
 

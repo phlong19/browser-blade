@@ -5,7 +5,6 @@ import {
   KEY_A,
   KEY_S,
   KEY_D,
-  KEY_SHIFT,
   Vec3,
   KEY_SPACE,
 } from "playcanvas";
@@ -56,7 +55,7 @@ export class PlayerController extends Script {
   strafeSlowSpeed = 2;
 
   /** @attribute @type {number} */
-  strafeFastSpeed = 3;
+  strafeSpeed = 3;
 
   /** @attribute @type {number} */
   jumpSpeed = 4.5;
@@ -158,7 +157,6 @@ export class PlayerController extends Script {
       inputZ /= inputLength;
     }
 
-    const fast = keyboard.isPressed(KEY_SHIFT) && hasMovementInput;
     const jumpPressed = keyboard.wasPressed(KEY_SPACE);
 
     // ----------------------------
@@ -195,7 +193,7 @@ export class PlayerController extends Script {
     // MOVEMENT SPEED
     // ----------------------------
 
-    const movementSpeed = this.getMovementSpeed(inputX, inputZ, fast);
+    const movementSpeed = this.getMovementSpeed(inputX, inputZ);
 
     const currentVelocity = this.entity.rigidbody.linearVelocity;
 
@@ -220,9 +218,8 @@ export class PlayerController extends Script {
     // ANIMATION TARGET
     // ----------------------------
 
-    const animMagnitude = fast ? 2 : 1;
-    const targetAnimX = inputX * animMagnitude;
-    const targetAnimZ = inputZ * animMagnitude;
+    const targetAnimX = inputX * 2;
+    const targetAnimZ = inputZ * 2;
 
     // ----------------------------
     // SMOOTH BLEND PARAMETERS
@@ -423,7 +420,7 @@ export class PlayerController extends Script {
     return normalizedYaw;
   }
 
-  getMovementSpeed(inputX, inputZ, fast) {
+  getMovementSpeed(inputX, inputZ) {
     const absX = Math.abs(inputX);
     const absZ = Math.abs(inputZ);
     const total = absX + absZ;
@@ -435,12 +432,12 @@ export class PlayerController extends Script {
     let zSpeed;
 
     if (inputZ >= 0) {
-      zSpeed = fast ? this.runForwardSpeed : this.walkForwardSpeed;
+      zSpeed = this.runForwardSpeed;
     } else {
-      zSpeed = fast ? this.runBackwardSpeed : this.walkBackwardSpeed;
+      zSpeed = this.runBackwardSpeed;
     }
 
-    const xSpeed = fast ? this.strafeFastSpeed : this.strafeSlowSpeed;
+    const xSpeed = this.strafeSpeed;
 
     return (zSpeed * absZ + xSpeed * absX) / total;
   }
