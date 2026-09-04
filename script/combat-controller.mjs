@@ -1,10 +1,11 @@
 import { Script, Mouse, MOUSEBUTTON_LEFT, Entity } from "playcanvas";
 
 const INDICATOR_LAYOUT = {
-  overhead: { x: 0, y: 1, rotation: 0 },
-  right: { x: 1, y: 0, rotation: -90 },
-  thrust: { x: 0, y: -1, rotation: 180 },
-  left: { x: -1, y: 0, rotation: 90 },
+  // The arrow sits outside the center and points inward toward it.
+  overhead: { x: 0, y: 1, rotation: 180 },
+  right: { x: 1, y: 0, rotation: 90 },
+  thrust: { x: 0, y: -1, rotation: 0 },
+  left: { x: -1, y: 0, rotation: -90 },
 };
 
 export class CombatController extends Script {
