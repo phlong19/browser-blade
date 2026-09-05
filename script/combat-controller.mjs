@@ -33,6 +33,7 @@ export class CombatController extends Script {
     this.previewTimer = 0;
     this.pointerLockWasActive = false;
     this.ignoreLeftUntilReleased = false;
+    this.attackStateSeen = false;
     this.didWarnMissingIndicator = false;
 
     this.hideDirectionIndicator();
@@ -43,6 +44,8 @@ export class CombatController extends Script {
   update(dt) {
     const mouse = this.app.mouse;
     const locked = Mouse.isPointerLocked();
+
+    this.updateAttackCycle();
 
     if (!locked) {
       if (this.state === "prepared") this.cancelTracking();
@@ -66,7 +69,7 @@ export class CombatController extends Script {
       this.finishTracking();
     }
 
-    if (this.state === "idle") {
+    if (this.state === "idle" || this.state === "attacking") {
       this.previewTimer -= dt;
       if (this.previewTimer <= 0) this.hideDirectionIndicator();
     }
@@ -110,10 +113,36 @@ export class CombatController extends Script {
   finishTracking() {
     const direction = this.attackDirection ?? "right";
     console.log(`[Combat] execute: ${direction}`);
-    this.state = "idle";
+    this.state = "attacking";
+    this.attackStateSeen = false;
     this.attackDirection = null;
     this.hideDirectionIndicator();
     this.executeAttack(direction);
+  }
+
+  updateAttackCycle() {
+    if (this.state !== "attacking") return;
+
+    const layer = this.animEntity?.anim?.baseLayer;
+    if (!layer) {
+      this.state = "idle";
+      return;
+    }
+
+    if (layer.activeState === "AttackRight") {
+      this.attackStateSeen = true;
+      return;
+    }
+
+    if (
+      this.attackStateSeen &&
+      layer.activeState === "Locomotion" &&
+      !layer.transitioning
+    ) {
+      this.state = "idle";
+      this.attackStateSeen = false;
+      console.log("[Combat] attack complete");
+    }
   }
 
   cancelTracking() {
