@@ -1,4 +1,4 @@
-import { Script, Mouse, MOUSEBUTTON_LEFT, Entity } from "playcanvas";
+import { Script, Mouse, MOUSEBUTTON_LEFT, Entity, Vec3 } from "playcanvas";
 
 const INDICATOR_LAYOUT = {
   // The arrow sits outside the center and points inward toward it.
@@ -31,6 +31,10 @@ export class CombatController extends Script {
   directionIndicator;
   /** Entity containing the existing runtime Anim graph. @attribute @type {Entity} */
   animEntity;
+  /** WeaponAnchor_R entity used to locate the bone attachment. @attribute @type {Entity} */
+  weaponAnchor;
+  /** Local WeaponSocket_R Euler rotation during AttackThrust. @attribute @type {Vec3} */
+  thrustWeaponEulerOffset = new Vec3(0, 90, 0);
 
   initialize() {
     this.state = "idle";
@@ -42,6 +46,7 @@ export class CombatController extends Script {
     this.attackStateSeen = false;
     this.attackStateName = null;
     this.didWarnMissingIndicator = false;
+    this.didWarnMissingWeaponAnchor = false;
 
     this.updateDirectionIndicator(this.selectedDirection);
     this.app.mouse.on(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
@@ -133,6 +138,7 @@ export class CombatController extends Script {
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
 
     if (!layer) {
+      this.clearWeaponPoseOffset();
       this.state = "idle";
       return;
     }
@@ -152,6 +158,7 @@ export class CombatController extends Script {
       this.attackStateName = null;
 
       layer.blendToWeight(0, 0.12);
+      this.clearWeaponPoseOffset();
 
       console.log("[Combat] attack complete");
     }
@@ -195,10 +202,32 @@ export class CombatController extends Script {
     if (this.directionIndicator) this.directionIndicator.enabled = false;
   }
 
+  applyThrustWeaponPose() {
+    if (!this.weaponAnchor) {
+      if (!this.didWarnMissingWeaponAnchor) {
+        this.didWarnMissingWeaponAnchor = true;
+        console.warn("[Combat] weaponAnchor is not assigned.");
+      }
+      return;
+    }
+
+    this.weaponAnchor.fire(
+      "weapon:pose",
+      this.thrustWeaponEulerOffset.x,
+      this.thrustWeaponEulerOffset.y,
+      this.thrustWeaponEulerOffset.z,
+    );
+  }
+
+  clearWeaponPoseOffset() {
+    this.weaponAnchor?.fire("weapon:clearPose");
+  }
+
   executeAttack(direction) {
     const anim = this.animEntity?.anim;
     if (!anim) {
       console.warn(`[Combat] missing attack animation for: ${direction}`);
+      this.clearWeaponPoseOffset();
       this.state = "idle";
       this.attackStateName = null;
       this.attackStateSeen = false;
@@ -209,6 +238,7 @@ export class CombatController extends Script {
 
     if (!combatLayer) {
       console.warn("[Combat] Combat animation layer is unavailable.");
+      this.clearWeaponPoseOffset();
       this.state = "idle";
       this.attackStateName = null;
       this.attackStateSeen = false;
@@ -219,6 +249,7 @@ export class CombatController extends Script {
 
     if (!attack || !combatLayer.states.includes(attack.state)) {
       console.warn(`[Combat] attack unavailable for: ${direction}`);
+      this.clearWeaponPoseOffset();
       this.state = "idle";
       this.attackStateName = null;
       this.attackStateSeen = false;
@@ -230,10 +261,16 @@ export class CombatController extends Script {
 
     anim.setInteger("attackDirection", attack.index);
     anim.setTrigger("attack");
+
+    if (direction === "thrust") {
+      this.applyThrustWeaponPose();
+    }
+
     console.log(`[Combat] play animation: ${attack.state}`);
   }
 
   destroy() {
+    this.clearWeaponPoseOffset();
     this.app.mouse.off(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
   }
 }
