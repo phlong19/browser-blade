@@ -8,11 +8,19 @@ const INDICATOR_LAYOUT = {
   left: { x: -1, y: 0, rotation: -90 },
 };
 
+const ATTACKS = {
+  right: { index: 0, state: "AttackRight" },
+  left: { index: 1, state: "AttackLeft" },
+  overhead: { index: 2, state: "AttackOverhead" },
+  thrust: { index: 3, state: "AttackThrust" },
+};
+const DIRECTION_DOMINANCE = 1.2;
+
 export class CombatController extends Script {
   static scriptName = "combatController";
 
-  /** Minimum mouse gesture magnitude before a direction is selected. @attribute @type {number} */
-  directionThreshold = 12;
+  /** Minimum accumulated mouse movement before a direction is selected. @attribute @type {number} */
+  directionThreshold = 18;
   /** Seconds a preview remains visible after its gesture completes. @attribute @type {number} */
   previewHoldTime = 0.25;
   /** Fraction of screen width used for left/right arrow placement. @attribute @type {number} */
@@ -26,18 +34,16 @@ export class CombatController extends Script {
 
   initialize() {
     this.state = "idle";
-    this.previewDirection = null;
-    this.attackDirection = null;
-    this.previewX = 0;
-    this.previewY = 0;
-    this.previewTimer = 0;
+    this.selectedDirection = "right";
+    this.directionDx = 0;
+    this.directionDy = 0;
     this.pointerLockWasActive = false;
     this.ignoreLeftUntilReleased = false;
     this.attackStateSeen = false;
-    this.lastCombatDiagnosticState = null;
+    this.attackStateName = null;
     this.didWarnMissingIndicator = false;
 
-    this.hideDirectionIndicator();
+    this.updateDirectionIndicator(this.selectedDirection);
     this.app.mouse.on(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
     console.log("[Combat] initialized");
   }
@@ -52,8 +58,6 @@ export class CombatController extends Script {
       if (this.state === "prepared") this.cancelTracking();
       this.pointerLockWasActive = false;
       this.ignoreLeftUntilReleased = false;
-      this.previewTimer = 0;
-      this.hideDirectionIndicator();
       return;
     }
 
@@ -70,54 +74,56 @@ export class CombatController extends Script {
       this.finishTracking();
     }
 
-    if (this.state === "idle" || this.state === "attacking") {
-      this.previewTimer -= dt;
-      if (this.previewTimer <= 0) this.hideDirectionIndicator();
-    }
   }
 
   onMouseMove(event) {
-    if (!Mouse.isPointerLocked()) return;
+    if (!Mouse.isPointerLocked() || this.state !== "idle") return;
 
-    this.previewX += event.dx;
-    this.previewY += event.dy;
+    this.directionDx += event.dx;
+    this.directionDy += event.dy;
 
-    if (Math.hypot(this.previewX, this.previewY) < this.directionThreshold) return;
-
-    const direction = this.classifyDirection(this.previewX, this.previewY);
-    this.previewX = 0;
-    this.previewY = 0;
-    this.previewTimer = this.previewHoldTime;
-
-    if (direction !== this.previewDirection) {
-      this.previewDirection = direction;
-      console.log(`[Combat] preview: ${direction}`);
+    if (Math.hypot(this.directionDx, this.directionDy) < this.directionThreshold) {
+      return;
     }
 
-    if (this.state === "prepared") this.attackDirection = direction;
-    this.updateDirectionIndicator(direction);
+    const direction = this.classifyDirection(this.directionDx, this.directionDy);
+    this.directionDx = 0;
+    this.directionDy = 0;
+
+    if (!direction || direction === this.selectedDirection) return;
+
+    this.selectedDirection = direction;
+    this.updateDirectionIndicator(this.selectedDirection);
+    console.log(`[Combat] selected direction: ${this.selectedDirection}`);
   }
 
   classifyDirection(x, y) {
-    if (Math.abs(x) > Math.abs(y)) return x > 0 ? "right" : "left";
+    const absX = Math.abs(x);
+    const absY = Math.abs(y);
+
+    if (absX > absY * DIRECTION_DOMINANCE) {
+      return x > 0 ? "right" : "left";
+    }
+
     // PlayCanvas pointer-lock dy < 0 is an upward mouse gesture.
-    return y < 0 ? "overhead" : "thrust";
+    if (absY > absX * DIRECTION_DOMINANCE) {
+      return y < 0 ? "overhead" : "thrust";
+    }
+
+    return null;
   }
 
   beginTracking() {
     this.state = "prepared";
-    this.attackDirection = this.previewDirection ?? "right";
-    if (this.attackDirection) this.updateDirectionIndicator(this.attackDirection);
-    console.log(`[Combat] attack begin: ${this.attackDirection ?? "none"}`);
+    this.updateDirectionIndicator(this.selectedDirection);
+    console.log(`[Combat] attack begin: ${this.selectedDirection}`);
   }
 
   finishTracking() {
-    const direction = this.attackDirection ?? "right";
+    const direction = this.selectedDirection;
     console.log(`[Combat] execute: ${direction}`);
     this.state = "attacking";
     this.attackStateSeen = false;
-    this.attackDirection = null;
-    this.hideDirectionIndicator();
     this.executeAttack(direction);
   }
 
@@ -131,9 +137,7 @@ export class CombatController extends Script {
       return;
     }
 
-    this.logCombatState(layer);
-
-    if (layer.activeState === "AttackRight") {
+    if (layer.activeState === this.attackStateName) {
       this.attackStateSeen = true;
       return;
     }
@@ -145,6 +149,7 @@ export class CombatController extends Script {
     ) {
       this.state = "idle";
       this.attackStateSeen = false;
+      this.attackStateName = null;
 
       layer.blendToWeight(0, 0.12);
 
@@ -154,10 +159,8 @@ export class CombatController extends Script {
 
   cancelTracking() {
     this.state = "idle";
-    this.attackDirection = null;
-    this.previewX = 0;
-    this.previewY = 0;
-    this.hideDirectionIndicator();
+    this.directionDx = 0;
+    this.directionDy = 0;
   }
 
   updateDirectionIndicator(direction) {
@@ -196,7 +199,9 @@ export class CombatController extends Script {
     const anim = this.animEntity?.anim;
     if (!anim) {
       console.warn(`[Combat] missing attack animation for: ${direction}`);
-
+      this.state = "idle";
+      this.attackStateName = null;
+      this.attackStateSeen = false;
       return;
     }
 
@@ -204,29 +209,28 @@ export class CombatController extends Script {
 
     if (!combatLayer) {
       console.warn("[Combat] Combat animation layer is unavailable.");
-
+      this.state = "idle";
+      this.attackStateName = null;
+      this.attackStateSeen = false;
       return;
     }
 
-    // The only imported combat clip is Attack Downward, assigned by the
-    // runtime graph to AttackRight as a temporary fallback for every direction.
+    const attack = ATTACKS[direction];
 
+    if (!attack || !combatLayer.states.includes(attack.state)) {
+      console.warn(`[Combat] attack unavailable for: ${direction}`);
+      this.state = "idle";
+      this.attackStateName = null;
+      this.attackStateSeen = false;
+      return;
+    }
+
+    this.attackStateName = attack.state;
     combatLayer.blendToWeight(1, 0.1);
 
+    anim.setInteger("attackDirection", attack.index);
     anim.setTrigger("attack");
-    this.lastCombatDiagnosticState = null;
-    this.logCombatState(combatLayer);
-    console.log("[Combat] play animation: AttackRight (Attack Downward)");
-  }
-
-  logCombatState(layer) {
-    const diagnosticState = `${layer.activeState}|${layer.transitioning}`;
-    if (diagnosticState === this.lastCombatDiagnosticState) return;
-
-    this.lastCombatDiagnosticState = diagnosticState;
-    console.log(`[Combat] activeState: ${layer.activeState}`);
-    console.log(`[Combat] weight: ${layer.weight}`);
-    console.log(`[Combat] transitioning: ${layer.transitioning}`);
+    console.log(`[Combat] play animation: ${attack.state}`);
   }
 
   destroy() {

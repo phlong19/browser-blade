@@ -59,6 +59,30 @@ export class LocomotionAnimator extends Script {
    */
   attackRight;
 
+  /**
+   * @attribute
+   * @title Attack Left
+   * @type {Asset}
+   * @resource animation
+   */
+  attackLeft;
+
+  /**
+   * @attribute
+   * @title Attack Overhead
+   * @type {Asset}
+   * @resource animation
+   */
+  attackOverhead;
+
+  /**
+   * @attribute
+   * @title Attack Thrust
+   * @type {Asset}
+   * @resource animation
+   */
+  attackThrust;
+
   initialize() {
     const anim = this.entity.anim;
 
@@ -70,11 +94,35 @@ export class LocomotionAnimator extends Script {
 
     this.validateAssets();
 
-    const hasRightAttack = !!this.attackRight?.resource;
-
-    if (hasRightAttack) {
-      this.logAttackCurvePaths();
-    }
+    const attackDefinitions = [
+      {
+        direction: "right",
+        index: 0,
+        state: "AttackRight",
+        asset: this.attackRight,
+      },
+      {
+        direction: "left",
+        index: 1,
+        state: "AttackLeft",
+        asset: this.attackLeft,
+      },
+      {
+        direction: "overhead",
+        index: 2,
+        state: "AttackOverhead",
+        asset: this.attackOverhead,
+      },
+      {
+        direction: "thrust",
+        index: 3,
+        state: "AttackThrust",
+        asset: this.attackThrust,
+      },
+    ];
+    const availableAttacks = attackDefinitions.filter(
+      ({ asset }) => !!asset?.resource,
+    );
 
     const states = [
       {
@@ -183,38 +231,50 @@ export class LocomotionAnimator extends Script {
       },
     ];
 
-    if (hasRightAttack) {
-      combatStates.push({
-        name: "AttackRight",
-        speed: 1,
-        loop: false,
-      });
+    if (availableAttacks.length > 0) {
+      for (const attack of availableAttacks) {
+        combatStates.push({
+          name: attack.state,
+          speed: 1,
+          loop: false,
+        });
 
-      combatTransitions.push(
-        {
-          from: "CombatIdle",
-          to: "AttackRight",
-          time: 0.1,
-          conditions: [
-            {
-              parameterName: "attack",
-              predicate: "EQUAL_TO",
-              value: true,
-            },
-          ],
-        },
-        {
-          from: "AttackRight",
-          to: "CombatIdle",
-          time: 0.15,
-          exitTime: 0.9,
-        },
-      );
+        combatTransitions.push(
+          {
+            from: "CombatIdle",
+            to: attack.state,
+            time: 0.1,
+            conditions: [
+              {
+                parameterName: "attack",
+                predicate: "EQUAL_TO",
+                value: true,
+              },
+              {
+                parameterName: "attackDirection",
+                predicate: "EQUAL_TO",
+                value: attack.index,
+              },
+            ],
+          },
+          {
+            from: attack.state,
+            to: "CombatIdle",
+            time: 0.15,
+            exitTime: 0.9,
+          },
+        );
+      }
 
       parameters.attack = {
         name: "attack",
         type: "TRIGGER",
         value: false,
+      };
+      parameters.attackDirection = {
+        name: "attackDirection",
+        type: "INTEGER",
+        value: 0,
       };
     }
 
@@ -251,30 +311,26 @@ export class LocomotionAnimator extends Script {
     layer.assignAnimation("Locomotion.StrafeRight", this.strafeRight.resource);
     layer.assignAnimation("Jump", this.jump.resource);
 
-    if (hasRightAttack) {
-      combatLayer.assignAnimation("CombatIdle", this.idle.resource);
-      combatLayer.assignAnimation("AttackRight", this.attackRight.resource);
+    combatLayer.assignAnimation("CombatIdle", this.idle.resource);
 
-      this.configureCombatMask(anim, combatLayer);
-      combatLayer.weight = 0;
-      layer.weight = 1;
+    for (const attack of availableAttacks) {
+      combatLayer.assignAnimation(attack.state, attack.asset.resource);
+    }
 
-      if (!combatLayer.playable) {
-        throw new Error(
-          "LocomotionAnimator Combat layer is not playable after assigning its tracks.",
-        );
-      }
+    this.configureCombatMask(combatLayer);
+    combatLayer.weight = 0;
+    layer.weight = 1;
 
-      console.log("[Anim] Combat layer playable: true");
-    } else {
-      this.warnOnce(
-        "didWarnMissingAttackRight",
-        "Right Swing unavailable until LocomotionAnimator.attackRight is assigned.",
+    if (!combatLayer.playable) {
+      throw new Error(
+        "LocomotionAnimator Combat layer is not playable after assigning its tracks.",
       );
     }
+
+    console.log("[Anim] Combat layer playable: true");
   }
 
-  configureCombatMask(anim, combatLayer) {
+  configureCombatMask(combatLayer) {
     const combatMaskPath =
       "RootNode/mixamorig:Hips/mixamorig:Spine";
 
@@ -285,47 +341,6 @@ export class LocomotionAnimator extends Script {
     };
 
     console.log(`[CombatMask] ${Object.keys(combatLayer.mask)[0]}`);
-  }
-
-  findRelativeBonePath(rootBone, boneName) {
-    const bone =
-      rootBone.name === boneName ? rootBone : rootBone.findByName(boneName);
-
-    if (!bone) return null;
-
-    const path = [];
-    let current = bone;
-
-    while (current && current !== rootBone) {
-      path.unshift(current.name);
-      current = current.parent;
-    }
-
-    return current === rootBone ? path.join("/") : null;
-  }
-
-  logAttackCurvePaths() {
-    const curves = this.attackRight.resource.curves ?? [];
-    const boneNames = ["Spine", "Hips", "LeftUpLeg", "RightUpLeg"];
-
-    for (const boneName of boneNames) {
-      const paths = new Set();
-
-      for (const curve of curves) {
-        for (const path of curve.paths ?? []) {
-          const pathText =
-            typeof path === "string" ? path : JSON.stringify(path);
-
-          if (pathText?.includes(boneName)) {
-            paths.add(pathText);
-          }
-        }
-      }
-
-      for (const path of paths) {
-        console.log(`[AnimTrack] ${boneName}: ${path}`);
-      }
-    }
   }
 
   validateAssets() {
