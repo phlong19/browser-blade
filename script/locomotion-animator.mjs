@@ -72,6 +72,10 @@ export class LocomotionAnimator extends Script {
 
     const hasRightAttack = !!this.attackRight?.resource;
 
+    if (hasRightAttack) {
+      this.logAttackCurvePaths();
+    }
+
     const states = [
       {
         name: "START",
@@ -161,16 +165,34 @@ export class LocomotionAnimator extends Script {
       },
     };
 
+    const combatStates = [
+      {
+        name: "START",
+      },
+      {
+        name: "CombatIdle",
+        speed: 1,
+        loop: true,
+      },
+    ];
+    const combatTransitions = [
+      {
+        from: "START",
+        to: "CombatIdle",
+        time: 0.15,
+      },
+    ];
+
     if (hasRightAttack) {
-      states.push({
+      combatStates.push({
         name: "AttackRight",
         speed: 1,
         loop: false,
       });
 
-      transitions.push(
+      combatTransitions.push(
         {
-          from: "Locomotion",
+          from: "CombatIdle",
           to: "AttackRight",
           time: 0.1,
           conditions: [
@@ -183,7 +205,7 @@ export class LocomotionAnimator extends Script {
         },
         {
           from: "AttackRight",
-          to: "Locomotion",
+          to: "CombatIdle",
           time: 0.15,
           exitTime: 0.9,
         },
@@ -203,11 +225,21 @@ export class LocomotionAnimator extends Script {
           states,
           transitions,
         },
+        {
+          name: "Combat",
+          states: combatStates,
+          transitions: combatTransitions,
+        },
       ],
       parameters,
     });
 
     const layer = anim.baseLayer;
+    const combatLayer = anim.findAnimationLayer("Combat");
+
+    if (!combatLayer) {
+      throw new Error("LocomotionAnimator failed to create the Combat layer.");
+    }
 
     layer.assignAnimation("Locomotion.Idle", this.idle.resource);
     layer.assignAnimation("Locomotion.Walk", this.walk.resource);
@@ -220,12 +252,79 @@ export class LocomotionAnimator extends Script {
     layer.assignAnimation("Jump", this.jump.resource);
 
     if (hasRightAttack) {
-      layer.assignAnimation("AttackRight", this.attackRight.resource);
+      combatLayer.assignAnimation("CombatIdle", this.idle.resource);
+      combatLayer.assignAnimation("AttackRight", this.attackRight.resource);
+
+      this.configureCombatMask(anim, combatLayer);
+      combatLayer.weight = 0;
+      layer.weight = 1;
+
+      if (!combatLayer.playable) {
+        throw new Error(
+          "LocomotionAnimator Combat layer is not playable after assigning its tracks.",
+        );
+      }
+
+      console.log("[Anim] Combat layer playable: true");
     } else {
       this.warnOnce(
         "didWarnMissingAttackRight",
         "Right Swing unavailable until LocomotionAnimator.attackRight is assigned.",
       );
+    }
+  }
+
+  configureCombatMask(anim, combatLayer) {
+    const combatMaskPath =
+      "RootNode/mixamorig:Hips/mixamorig:Spine";
+
+    combatLayer.mask = {
+      [combatMaskPath]: {
+        children: true,
+      },
+    };
+
+    console.log(`[CombatMask] ${Object.keys(combatLayer.mask)[0]}`);
+  }
+
+  findRelativeBonePath(rootBone, boneName) {
+    const bone =
+      rootBone.name === boneName ? rootBone : rootBone.findByName(boneName);
+
+    if (!bone) return null;
+
+    const path = [];
+    let current = bone;
+
+    while (current && current !== rootBone) {
+      path.unshift(current.name);
+      current = current.parent;
+    }
+
+    return current === rootBone ? path.join("/") : null;
+  }
+
+  logAttackCurvePaths() {
+    const curves = this.attackRight.resource.curves ?? [];
+    const boneNames = ["Spine", "Hips", "LeftUpLeg", "RightUpLeg"];
+
+    for (const boneName of boneNames) {
+      const paths = new Set();
+
+      for (const curve of curves) {
+        for (const path of curve.paths ?? []) {
+          const pathText =
+            typeof path === "string" ? path : JSON.stringify(path);
+
+          if (pathText?.includes(boneName)) {
+            paths.add(pathText);
+          }
+        }
+      }
+
+      for (const path of paths) {
+        console.log(`[AnimTrack] ${boneName}: ${path}`);
+      }
     }
   }
 

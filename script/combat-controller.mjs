@@ -34,6 +34,7 @@ export class CombatController extends Script {
     this.pointerLockWasActive = false;
     this.ignoreLeftUntilReleased = false;
     this.attackStateSeen = false;
+    this.lastCombatDiagnosticState = null;
     this.didWarnMissingIndicator = false;
 
     this.hideDirectionIndicator();
@@ -123,11 +124,14 @@ export class CombatController extends Script {
   updateAttackCycle() {
     if (this.state !== "attacking") return;
 
-    const layer = this.animEntity?.anim?.baseLayer;
+    const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
+
     if (!layer) {
       this.state = "idle";
       return;
     }
+
+    this.logCombatState(layer);
 
     if (layer.activeState === "AttackRight") {
       this.attackStateSeen = true;
@@ -136,11 +140,14 @@ export class CombatController extends Script {
 
     if (
       this.attackStateSeen &&
-      layer.activeState === "Locomotion" &&
+      layer.activeState === "CombatIdle" &&
       !layer.transitioning
     ) {
       this.state = "idle";
       this.attackStateSeen = false;
+
+      layer.blendToWeight(0, 0.12);
+
       console.log("[Combat] attack complete");
     }
   }
@@ -189,13 +196,37 @@ export class CombatController extends Script {
     const anim = this.animEntity?.anim;
     if (!anim) {
       console.warn(`[Combat] missing attack animation for: ${direction}`);
+
+      return;
+    }
+
+    const combatLayer = anim.findAnimationLayer("Combat");
+
+    if (!combatLayer) {
+      console.warn("[Combat] Combat animation layer is unavailable.");
+
       return;
     }
 
     // The only imported combat clip is Attack Downward, assigned by the
     // runtime graph to AttackRight as a temporary fallback for every direction.
+
+    combatLayer.blendToWeight(1, 0.1);
+
     anim.setTrigger("attack");
+    this.lastCombatDiagnosticState = null;
+    this.logCombatState(combatLayer);
     console.log("[Combat] play animation: AttackRight (Attack Downward)");
+  }
+
+  logCombatState(layer) {
+    const diagnosticState = `${layer.activeState}|${layer.transitioning}`;
+    if (diagnosticState === this.lastCombatDiagnosticState) return;
+
+    this.lastCombatDiagnosticState = diagnosticState;
+    console.log(`[Combat] activeState: ${layer.activeState}`);
+    console.log(`[Combat] weight: ${layer.weight}`);
+    console.log(`[Combat] transitioning: ${layer.transitioning}`);
   }
 
   destroy() {
