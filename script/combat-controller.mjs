@@ -23,6 +23,12 @@ export class CombatController extends Script {
   directionThreshold = 18;
   /** Seconds a preview remains visible after its gesture completes. @attribute @type {number} */
   previewHoldTime = 0.25;
+  /** Seconds the direction preview takes to fade out after its hold. @attribute @type {number} */
+  previewFadeTime = 0.2;
+  /** Attack progress at which mouse gestures can select the next attack direction. @attribute @type {number} */
+  directionUnlockProgress = 0.25;
+  /** Attack progress at which one follow-up request can be accepted. @attribute @type {number} */
+  nextAttackReadyProgress = 0.9;
   /** Fraction of screen width used for left/right arrow placement. @attribute @type {number} */
   horizontalOffsetFactor = 0.25;
   /** Fraction of screen height used for up/down arrow placement. @attribute @type {number} */
@@ -38,17 +44,21 @@ export class CombatController extends Script {
 
   initialize() {
     this.state = "idle";
-    this.selectedDirection = "right";
+    this.selectedDirection = null;
+    this.currentAttackDirection = null;
+    this.nextAttackDirection = null;
     this.directionDx = 0;
     this.directionDy = 0;
     this.pointerLockWasActive = false;
     this.ignoreLeftUntilReleased = false;
+    this.leftPressActive = false;
     this.attackStateSeen = false;
     this.attackStateName = null;
+    this.previewElapsed = 0;
     this.didWarnMissingIndicator = false;
     this.didWarnMissingWeaponAnchor = false;
 
-    this.updateDirectionIndicator(this.selectedDirection);
+    this.hideDirectionIndicator();
     this.app.mouse.on(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
     console.log("[Combat] initialized");
   }
@@ -57,13 +67,24 @@ export class CombatController extends Script {
     const mouse = this.app.mouse;
     const locked = Mouse.isPointerLocked();
 
-    this.updateAttackCycle();
-
     if (!locked) {
-      if (this.state === "prepared") this.cancelTracking();
+      this.hideDirectionIndicator();
+      this.directionDx = 0;
+      this.directionDy = 0;
+      this.nextAttackDirection = null;
+      this.leftPressActive = false;
       this.pointerLockWasActive = false;
       this.ignoreLeftUntilReleased = false;
+      this.updateAttackCycle();
       return;
+    }
+
+    this.updateAttackCycle();
+    this.updateDirectionPreview(dt);
+
+    if (this.state === "attacking" && !this.isDirectionTrackingUnlocked()) {
+      this.directionDx = 0;
+      this.directionDy = 0;
     }
 
     if (!this.pointerLockWasActive) {
@@ -72,17 +93,28 @@ export class CombatController extends Script {
     }
 
     if (this.ignoreLeftUntilReleased) {
-      if (!mouse.isPressed(MOUSEBUTTON_LEFT)) this.ignoreLeftUntilReleased = false;
-    } else if (this.state === "idle" && mouse.wasPressed(MOUSEBUTTON_LEFT)) {
-      this.beginTracking();
-    } else if (this.state === "prepared" && mouse.wasReleased(MOUSEBUTTON_LEFT)) {
-      this.finishTracking();
+      if (!mouse.isPressed(MOUSEBUTTON_LEFT)) {
+        this.ignoreLeftUntilReleased = false;
+      }
+      return;
     }
 
+    if (mouse.wasPressed(MOUSEBUTTON_LEFT)) {
+      this.leftPressActive = true;
+    }
+
+    if (this.leftPressActive && mouse.wasReleased(MOUSEBUTTON_LEFT)) {
+      this.leftPressActive = false;
+      this.handleAttackInput();
+    }
   }
 
   onMouseMove(event) {
-    if (!Mouse.isPointerLocked() || this.state !== "idle") return;
+    if (!Mouse.isPointerLocked() || !this.isDirectionTrackingUnlocked()) {
+      this.directionDx = 0;
+      this.directionDy = 0;
+      return;
+    }
 
     this.directionDx += event.dx;
     this.directionDy += event.dy;
@@ -95,10 +127,10 @@ export class CombatController extends Script {
     this.directionDx = 0;
     this.directionDy = 0;
 
-    if (!direction || direction === this.selectedDirection) return;
+    if (!direction) return;
 
     this.selectedDirection = direction;
-    this.updateDirectionIndicator(this.selectedDirection);
+    this.showDirectionPreview(direction);
     console.log(`[Combat] selected direction: ${this.selectedDirection}`);
   }
 
@@ -118,18 +150,24 @@ export class CombatController extends Script {
     return null;
   }
 
-  beginTracking() {
-    this.state = "prepared";
-    this.updateDirectionIndicator(this.selectedDirection);
-    console.log(`[Combat] attack begin: ${this.selectedDirection}`);
-  }
+  handleAttackInput() {
+    if (this.state === "idle") {
+      if (!this.selectedDirection) return;
+      this.startAttack(this.selectedDirection);
+      return;
+    }
 
-  finishTracking() {
-    const direction = this.selectedDirection;
-    console.log(`[Combat] execute: ${direction}`);
-    this.state = "attacking";
-    this.attackStateSeen = false;
-    this.executeAttack(direction);
+    if (
+      this.state !== "attacking" ||
+      this.nextAttackDirection ||
+      !this.selectedDirection ||
+      !this.isReadyForNextAttack()
+    ) {
+      return;
+    }
+
+    this.nextAttackDirection = this.selectedDirection;
+    console.log(`[Combat] follow-up requested: ${this.nextAttackDirection}`);
   }
 
   updateAttackCycle() {
@@ -140,6 +178,8 @@ export class CombatController extends Script {
     if (!layer) {
       this.clearWeaponPoseOffset();
       this.state = "idle";
+      this.currentAttackDirection = null;
+      this.nextAttackDirection = null;
       return;
     }
 
@@ -156,18 +196,63 @@ export class CombatController extends Script {
       this.state = "idle";
       this.attackStateSeen = false;
       this.attackStateName = null;
-
-      layer.blendToWeight(0, 0.12);
       this.clearWeaponPoseOffset();
 
       console.log("[Combat] attack complete");
+
+      const nextDirection = this.nextAttackDirection;
+      this.nextAttackDirection = null;
+      this.currentAttackDirection = null;
+
+      if (nextDirection) {
+        this.startAttack(nextDirection);
+      } else {
+        layer.blendToWeight(0, 0.12);
+      }
     }
   }
 
-  cancelTracking() {
-    this.state = "idle";
-    this.directionDx = 0;
-    this.directionDy = 0;
+  isDirectionTrackingUnlocked() {
+    if (this.state !== "attacking") return true;
+
+    const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
+    return (
+      layer?.activeState === this.attackStateName &&
+      typeof layer.activeStateProgress === "number" &&
+      layer.activeStateProgress >= this.directionUnlockProgress
+    );
+  }
+
+  isReadyForNextAttack() {
+    const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
+    return (
+      layer?.activeState === this.attackStateName &&
+      typeof layer.activeStateProgress === "number" &&
+      layer.activeStateProgress >= this.nextAttackReadyProgress
+    );
+  }
+
+  updateDirectionPreview(dt) {
+    if (!this.directionIndicator?.enabled) return;
+
+    this.previewElapsed += dt;
+    if (this.previewElapsed <= this.previewHoldTime) return;
+
+    const fadeElapsed = this.previewElapsed - this.previewHoldTime;
+    if (fadeElapsed >= this.previewFadeTime) {
+      this.hideDirectionIndicator();
+      return;
+    }
+
+    const element = this.directionIndicator.element;
+    if (element) element.opacity = 1 - fadeElapsed / this.previewFadeTime;
+  }
+
+  showDirectionPreview(direction) {
+    this.previewElapsed = 0;
+    this.updateDirectionIndicator(direction);
+    const element = this.directionIndicator?.element;
+    if (element) element.opacity = 1;
   }
 
   updateDirectionIndicator(direction) {
@@ -199,7 +284,11 @@ export class CombatController extends Script {
   }
 
   hideDirectionIndicator() {
-    if (this.directionIndicator) this.directionIndicator.enabled = false;
+    if (this.directionIndicator) {
+      this.directionIndicator.enabled = false;
+      const element = this.directionIndicator.element;
+      if (element) element.opacity = 1;
+    }
   }
 
   applyThrustWeaponPose() {
@@ -223,12 +312,21 @@ export class CombatController extends Script {
     this.weaponAnchor?.fire("weapon:clearPose");
   }
 
-  executeAttack(direction) {
+  startAttack(direction) {
+    this.state = "attacking";
+    this.currentAttackDirection = direction;
+    this.attackStateSeen = false;
+    this.executeAttack();
+  }
+
+  executeAttack() {
+    const direction = this.currentAttackDirection;
     const anim = this.animEntity?.anim;
     if (!anim) {
       console.warn(`[Combat] missing attack animation for: ${direction}`);
       this.clearWeaponPoseOffset();
       this.state = "idle";
+      this.currentAttackDirection = null;
       this.attackStateName = null;
       this.attackStateSeen = false;
       return;
@@ -240,6 +338,7 @@ export class CombatController extends Script {
       console.warn("[Combat] Combat animation layer is unavailable.");
       this.clearWeaponPoseOffset();
       this.state = "idle";
+      this.currentAttackDirection = null;
       this.attackStateName = null;
       this.attackStateSeen = false;
       return;
@@ -251,6 +350,7 @@ export class CombatController extends Script {
       console.warn(`[Combat] attack unavailable for: ${direction}`);
       this.clearWeaponPoseOffset();
       this.state = "idle";
+      this.currentAttackDirection = null;
       this.attackStateName = null;
       this.attackStateSeen = false;
       return;
@@ -260,6 +360,7 @@ export class CombatController extends Script {
     combatLayer.blendToWeight(1, 0.1);
 
     anim.setInteger("attackDirection", attack.index);
+    this.entity.fire("combat:faceView");
     anim.setTrigger("attack");
 
     if (direction === "thrust") {

@@ -112,6 +112,8 @@ export class PlayerController extends Script {
     // Current animation-tree position.
     this.animMoveX = 0;
     this.animMoveZ = 0;
+
+    this.entity.on("combat:faceView", this.onCombatFaceView, this);
   }
 
   update(dt) {
@@ -240,6 +242,12 @@ export class PlayerController extends Script {
 
       this.visual.anim.setFloat("moveZ", this.animMoveZ);
     }
+  }
+
+  onCombatFaceView() {
+    this.facingYaw = this.normalizeYaw(this.getViewYaw());
+    this.updateFacingAxes();
+    this.updateVisualFacing();
   }
 
   checkGrounded() {
@@ -450,5 +458,9 @@ export class PlayerController extends Script {
     this[flagName] = true;
 
     console.warn(message);
+  }
+
+  destroy() {
+    this.entity.off("combat:faceView", this.onCombatFaceView, this);
   }
 }
