@@ -16,6 +16,16 @@ export class FollowCamera extends Script {
   initialElevation = 3;
   /** Mouse sensitivity. @attribute @type {number} */
   sensitivity = 0.15;
+  /**
+   * Maximum absolute raw mouse delta accepted from one mouse event.
+   * @attribute @type {number}
+   */
+  maxMouseDelta = 150;
+  /**
+   * Maximum accumulated raw mouse delta accepted in one game frame.
+   * @attribute @type {number}
+   */
+  maxFrameMouseDelta = 200;
   /** Highest camera elevation. @attribute @type {number} */
   maxElevation = 89.5;
   /** Ground height used by the lower elevation clamp. @attribute @type {number} */
@@ -30,6 +40,8 @@ export class FollowCamera extends Script {
     // Runtime composition uses configured values, never the editor transform.
     this.yaw = this.initialYaw;
     this.elevation = this.initialElevation;
+    this.pendingMouseDx = 0;
+    this.pendingMouseDy = 0;
     this.clampElevation();
 
     this.app.mouse.on(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
@@ -45,8 +57,44 @@ export class FollowCamera extends Script {
   onMouseMove(event) {
     if (!Mouse.isPointerLocked()) return;
 
-    this.yaw -= event.dx * this.sensitivity;
-    this.elevation += event.dy * this.sensitivity;
+    if (
+      Math.abs(event.dx) > this.maxMouseDelta ||
+      Math.abs(event.dy) > this.maxMouseDelta
+    ) {
+      console.warn("[CameraInputSpikeRejected]", {
+        dx: event.dx,
+        dy: event.dy,
+        maxMouseDelta: this.maxMouseDelta,
+      });
+      return;
+    }
+
+    this.pendingMouseDx += event.dx;
+    this.pendingMouseDy += event.dy;
+  }
+
+  update() {
+    const dx = this.pendingMouseDx;
+    const dy = this.pendingMouseDy;
+    this.pendingMouseDx = 0;
+    this.pendingMouseDy = 0;
+
+    if (!Mouse.isPointerLocked() || (dx === 0 && dy === 0)) return;
+
+    if (
+      Math.abs(dx) > this.maxFrameMouseDelta ||
+      Math.abs(dy) > this.maxFrameMouseDelta
+    ) {
+      console.warn("[CameraFrameInputSpikeRejected]", {
+        dx,
+        dy,
+        maxFrameMouseDelta: this.maxFrameMouseDelta,
+      });
+      return;
+    }
+
+    this.yaw -= dx * this.sensitivity;
+    this.elevation += dy * this.sensitivity;
     this.clampElevation();
   }
 
