@@ -1,7 +1,15 @@
-import { Script, Mouse, MOUSEBUTTON_LEFT, Entity, Vec3 } from "playcanvas";
+import {
+  Script,
+  Mouse,
+  MOUSEBUTTON_LEFT,
+  MOUSEBUTTON_RIGHT,
+  Entity,
+  Vec3,
+} from "playcanvas";
+
+const COMBAT_DEBUG_VERSION = "attack-input-direction-release-v2";
 
 const INDICATOR_LAYOUT = {
-  // The arrow sits outside the center and points inward toward it.
   overhead: { x: 0, y: 1, rotation: 180 },
   right: { x: 1, y: 0, rotation: 90 },
   thrust: { x: 0, y: -1, rotation: 0 },
@@ -14,6 +22,7 @@ const ATTACKS = {
   overhead: { index: 2, state: "AttackOverhead" },
   thrust: { index: 3, state: "AttackThrust" },
 };
+
 const DIRECTION_DOMINANCE = 1.2;
 
 export class CombatController extends Script {
@@ -25,10 +34,12 @@ export class CombatController extends Script {
   previewHoldTime = 0.25;
   /** Seconds the direction preview takes to fade out after its hold. @attribute @type {number} */
   previewFadeTime = 0.2;
-  /** Attack progress at which mouse gestures can select the next attack direction. @attribute @type {number} */
+  /** Attack progress at which mouse gestures can select a future attack direction. @attribute @type {number} */
   directionUnlockProgress = 0.25;
-  /** Attack progress at which one follow-up request can be accepted. @attribute @type {number} */
-  nextAttackReadyProgress = 0.9;
+  /** Attack progress at which a new LMB press may buffer one next attack. @attribute @type {number} */
+  recoveryStartProgress = 0.7;
+  /** AttackRight progress at which a held input pins the Combat layer time. @attribute @type {number} */
+  rightChamberProgress = 0.4;
   /** Fraction of screen width used for left/right arrow placement. @attribute @type {number} */
   horizontalOffsetFactor = 0.25;
   /** Fraction of screen height used for up/down arrow placement. @attribute @type {number} */
@@ -40,18 +51,37 @@ export class CombatController extends Script {
   /** WeaponAnchor_R entity used to locate the bone attachment. @attribute @type {Entity} */
   weaponAnchor;
   /** Local WeaponSocket_R Euler rotation during AttackThrust. @attribute @type {Vec3} */
-  thrustWeaponEulerOffset = new Vec3(0, 90, 0);
+  thrustWeaponEulerOffset = new Vec3(45, 0, 0);
 
   initialize() {
     this.state = "idle";
     this.selectedDirection = null;
     this.currentAttackDirection = null;
-    this.nextAttackDirection = null;
+
+    // Ownership of the currently physical LMB press:
+    // none | current | pending | rejected.
+    this.lmbPressOwner = "none";
+
+    // One buffered recovery press at most. Direction stays live while held and
+    // is captured only when that press releases or the next attack commits.
+    this.pendingInputActive = false;
+    this.pendingAttackDirection = null;
+    this.pendingInputHeld = false;
+    this.pendingReleaseRequested = false;
+
+    this.recoveryOpen = false;
+    this.attackCancelRequested = false;
+
     this.directionDx = 0;
     this.directionDy = 0;
     this.pointerLockWasActive = false;
     this.ignoreLeftUntilReleased = false;
-    this.leftPressActive = false;
+
+    this.rightChamberInputActive = false;
+    this.rightReleaseRequested = false;
+    this.rightChamberHolding = false;
+    this.rightChamberHoldTime = null;
+
     this.attackStateSeen = false;
     this.attackStateName = null;
     this.previewElapsed = 0;
@@ -60,6 +90,8 @@ export class CombatController extends Script {
 
     this.hideDirectionIndicator();
     this.app.mouse.on(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
+
+    console.log(`[CombatVersion] ${COMBAT_DEBUG_VERSION}`);
     console.log("[Combat] initialized");
   }
 
@@ -68,18 +100,13 @@ export class CombatController extends Script {
     const locked = Mouse.isPointerLocked();
 
     if (!locked) {
-      this.hideDirectionIndicator();
-      this.directionDx = 0;
-      this.directionDy = 0;
-      this.nextAttackDirection = null;
-      this.leftPressActive = false;
-      this.pointerLockWasActive = false;
-      this.ignoreLeftUntilReleased = false;
+      this.handlePointerLockLost(mouse);
       this.updateAttackCycle();
       return;
     }
 
     this.updateAttackCycle();
+    this.pinRightChamberTime();
     this.updateDirectionPreview(dt);
 
     if (this.state === "attacking" && !this.isDirectionTrackingUnlocked()) {
@@ -89,7 +116,11 @@ export class CombatController extends Script {
 
     if (!this.pointerLockWasActive) {
       this.pointerLockWasActive = true;
-      if (mouse.isPressed(MOUSEBUTTON_LEFT)) this.ignoreLeftUntilReleased = true;
+
+      if (mouse.isPressed(MOUSEBUTTON_LEFT)) {
+        this.ignoreLeftUntilReleased = true;
+        this.lmbPressOwner = "none";
+      }
     }
 
     if (this.ignoreLeftUntilReleased) {
@@ -100,13 +131,193 @@ export class CombatController extends Script {
     }
 
     if (mouse.wasPressed(MOUSEBUTTON_LEFT)) {
-      this.leftPressActive = true;
+      this.handleLmbDown();
     }
 
-    if (this.leftPressActive && mouse.wasReleased(MOUSEBUTTON_LEFT)) {
-      this.leftPressActive = false;
-      this.handleAttackInput();
+    if (mouse.wasPressed(MOUSEBUTTON_RIGHT)) {
+      this.handleCancelInput();
     }
+
+    if (mouse.wasReleased(MOUSEBUTTON_LEFT)) {
+      this.handleLmbUp();
+    }
+  }
+
+  handlePointerLockLost(mouse) {
+    if (this.pointerLockWasActive) {
+      if (
+        this.currentAttackDirection === "right" &&
+        (this.rightChamberInputActive || this.rightChamberHolding)
+      ) {
+        this.cancelCurrentRightPreparation("pointer-lock-lost");
+      }
+
+      this.clearPendingAttack();
+      this.lmbPressOwner = "none";
+    }
+
+    this.hideDirectionIndicator();
+    this.directionDx = 0;
+    this.directionDy = 0;
+    this.pointerLockWasActive = false;
+
+    if (!mouse.isPressed(MOUSEBUTTON_LEFT)) {
+      this.ignoreLeftUntilReleased = false;
+    }
+  }
+
+  handleLmbDown() {
+    if (this.lmbPressOwner !== "none") return;
+
+    if (this.state === "idle") {
+      // Accept the physical press, but do not freeze direction yet.
+      // Quick attacks use the latest selection on release. A fresh Right
+      // gesture while still held can commit into the Right chamber early.
+      this.lmbPressOwner = "current";
+      console.log("[CombatInput:CURRENT]");
+      return;
+    }
+
+    if (this.state !== "attacking") {
+      this.rejectCurrentLmbPress("invalid-state");
+      return;
+    }
+
+    if (!this.recoveryOpen) {
+      this.rejectCurrentLmbPress("before-recovery");
+      return;
+    }
+
+    if (this.pendingInputActive) {
+      this.rejectCurrentLmbPress("pending-already-exists");
+      return;
+    }
+
+    this.lmbPressOwner = "pending";
+    this.pendingInputActive = true;
+    this.pendingAttackDirection = null;
+    this.pendingInputHeld = true;
+    this.pendingReleaseRequested = false;
+
+    console.log("[CombatInput:PENDING]");
+  }
+
+  handleLmbUp() {
+    switch (this.lmbPressOwner) {
+      case "rejected": {
+        this.lmbPressOwner = "none";
+        return;
+      }
+
+      case "pending": {
+        // This press was valid because DOWN happened during recovery.
+        // Capture the final quick-attack direction on RELEASE.
+        this.pendingInputHeld = false;
+        this.pendingReleaseRequested = true;
+        this.pendingAttackDirection = this.selectedDirection;
+        this.lmbPressOwner = "none";
+
+        console.log(
+          `[CombatInput:PENDING_RELEASE] direction=${this.pendingAttackDirection ?? "none"}`,
+        );
+        return;
+      }
+
+      case "current": {
+        if (
+          this.state === "attacking" &&
+          this.currentAttackDirection === "right" &&
+          (this.rightChamberInputActive || this.rightChamberHolding)
+        ) {
+          this.releaseRightChamberInput();
+          this.lmbPressOwner = "none";
+          return;
+        }
+
+        if (this.state === "idle") {
+          // Quick attacks commit the latest selected direction at RELEASE,
+          // not the direction that happened to be selected on LMB DOWN.
+          const direction = this.selectedDirection;
+          this.lmbPressOwner = "none";
+
+          if (direction) {
+            this.startAttack(direction, false);
+          }
+          return;
+        }
+
+        // Consume unmatched current releases. Never reinterpret them later.
+        this.lmbPressOwner = "none";
+        return;
+      }
+
+      case "none":
+      default:
+        return;
+    }
+  }
+
+  rejectCurrentLmbPress(reason) {
+    this.lmbPressOwner = "rejected";
+    console.log(`[CombatInput:REJECTED] reason=${reason}`);
+  }
+
+  handleCancelInput() {
+    const mouse = this.app.mouse;
+
+    if (this.pendingInputActive) {
+      const pendingPressStillHeld =
+        this.lmbPressOwner === "pending" && mouse.isPressed(MOUSEBUTTON_LEFT);
+
+      this.clearPendingAttack();
+
+      if (pendingPressStillHeld) {
+        this.lmbPressOwner = "rejected";
+      } else if (this.lmbPressOwner === "pending") {
+        this.lmbPressOwner = "none";
+      }
+
+      console.log("[CombatInput:CANCEL] pending");
+      return;
+    }
+
+    if (
+      this.currentAttackDirection === "right" &&
+      (this.rightChamberInputActive || this.rightChamberHolding)
+    ) {
+      this.cancelCurrentRightPreparation("rmb");
+      return;
+    }
+
+    if (this.state === "idle" && this.lmbPressOwner === "current") {
+      this.lmbPressOwner = mouse.isPressed(MOUSEBUTTON_LEFT)
+        ? "rejected"
+        : "none";
+
+      console.log("[CombatInput:CANCEL] prepared");
+    }
+  }
+
+  cancelCurrentRightPreparation(reason) {
+    const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
+    const mouse = this.app.mouse;
+
+    this.clearRightChamberState();
+
+    this.lmbPressOwner = mouse.isPressed(MOUSEBUTTON_LEFT)
+      ? "rejected"
+      : "none";
+
+    this.attackCancelRequested = true;
+    this.recoveryOpen = false;
+
+    if (layer?.states.includes("CombatIdle")) {
+      layer.transition("CombatIdle", 0.1);
+    } else {
+      this.resetCurrentAttackAfterFailure();
+    }
+
+    console.log(`[CombatInput:CANCEL] current=right reason=${reason}`);
   }
 
   onMouseMove(event) {
@@ -119,19 +330,44 @@ export class CombatController extends Script {
     this.directionDx += event.dx;
     this.directionDy += event.dy;
 
-    if (Math.hypot(this.directionDx, this.directionDy) < this.directionThreshold) {
+    if (
+      Math.hypot(this.directionDx, this.directionDy) < this.directionThreshold
+    ) {
       return;
     }
 
-    const direction = this.classifyDirection(this.directionDx, this.directionDy);
+    const direction = this.classifyDirection(
+      this.directionDx,
+      this.directionDy,
+    );
+
     this.directionDx = 0;
     this.directionDy = 0;
 
     if (!direction) return;
 
-    this.selectedDirection = direction;
-    this.showDirectionPreview(direction);
-    console.log(`[Combat] selected direction: ${this.selectedDirection}`);
+    const selectionChanged = direction !== this.selectedDirection;
+
+    if (selectionChanged) {
+      this.selectedDirection = direction;
+      this.showDirectionPreview(direction);
+
+      console.log(`[Combat] selected direction: ${direction}`);
+    }
+
+    // Important:
+    // even if selectedDirection was already Right from the previous attack,
+    // this fresh Right gesture is still meaningful while LMB is held.
+    //
+    // It commits the current held press into the proven Right chamber.
+    if (
+      direction === "right" &&
+      this.lmbPressOwner === "current" &&
+      this.state === "idle" &&
+      this.app.mouse.isPressed(MOUSEBUTTON_LEFT)
+    ) {
+      this.startAttack("right", true);
+    }
   }
 
   classifyDirection(x, y) {
@@ -142,32 +378,11 @@ export class CombatController extends Script {
       return x > 0 ? "right" : "left";
     }
 
-    // PlayCanvas pointer-lock dy < 0 is an upward mouse gesture.
     if (absY > absX * DIRECTION_DOMINANCE) {
       return y < 0 ? "overhead" : "thrust";
     }
 
     return null;
-  }
-
-  handleAttackInput() {
-    if (this.state === "idle") {
-      if (!this.selectedDirection) return;
-      this.startAttack(this.selectedDirection);
-      return;
-    }
-
-    if (
-      this.state !== "attacking" ||
-      this.nextAttackDirection ||
-      !this.selectedDirection ||
-      !this.isReadyForNextAttack()
-    ) {
-      return;
-    }
-
-    this.nextAttackDirection = this.selectedDirection;
-    console.log(`[Combat] follow-up requested: ${this.nextAttackDirection}`);
   }
 
   updateAttackCycle() {
@@ -176,46 +391,148 @@ export class CombatController extends Script {
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
 
     if (!layer) {
-      this.clearWeaponPoseOffset();
-      this.state = "idle";
-      this.currentAttackDirection = null;
-      this.nextAttackDirection = null;
+      this.resetCurrentAttackAfterFailure();
       return;
     }
 
     if (layer.activeState === this.attackStateName) {
       this.attackStateSeen = true;
+
+      if (
+        !this.recoveryOpen &&
+        typeof layer.activeStateProgress === "number" &&
+        layer.activeStateProgress >= this.recoveryStartProgress
+      ) {
+        this.recoveryOpen = true;
+
+        console.log(
+          `[CombatInput:RECOVERY_OPEN] direction=${this.currentAttackDirection} progress=${layer.activeStateProgress.toFixed(3)}`,
+        );
+      }
+
+      this.updateRightChamber(layer);
       return;
     }
 
     if (
-      this.attackStateSeen &&
+      (this.attackStateSeen || this.attackCancelRequested) &&
       layer.activeState === "CombatIdle" &&
       !layer.transitioning
     ) {
-      this.state = "idle";
-      this.attackStateSeen = false;
-      this.attackStateName = null;
-      this.clearWeaponPoseOffset();
+      this.completeCurrentAttack(layer);
+    }
+  }
 
-      console.log("[Combat] attack complete");
+  completeCurrentAttack(layer) {
+    const wasCanceled = this.attackCancelRequested;
 
-      const nextDirection = this.nextAttackDirection;
-      this.nextAttackDirection = null;
-      this.currentAttackDirection = null;
+    const hadPendingInput = this.pendingInputActive;
 
-      if (nextDirection) {
-        this.startAttack(nextDirection);
+    const pendingDirection = this.pendingAttackDirection;
+
+    const pendingInputHeld = this.pendingInputHeld;
+
+    const pendingReleaseRequested = this.pendingReleaseRequested;
+
+    this.clearRightChamberState();
+    this.clearWeaponPoseOffset();
+
+    this.state = "idle";
+    this.currentAttackDirection = null;
+    this.attackStateSeen = false;
+    this.attackStateName = null;
+    this.recoveryOpen = false;
+    this.attackCancelRequested = false;
+
+    this.clearPendingAttack();
+
+    console.log(
+      wasCanceled ? "[Combat] attack canceled" : "[Combat] attack complete",
+    );
+
+    if (wasCanceled || !hadPendingInput) {
+      layer.blendToWeight(0, 0.12);
+      return;
+    }
+
+    if (pendingInputHeld && !pendingReleaseRequested) {
+      // Attack A finished while the accepted recovery press
+      // is still physically held.
+      //
+      // Direction is still live. It has NOT been frozen at
+      // the original LMB-down moment.
+      this.lmbPressOwner = "current";
+
+      console.log(
+        `[CombatInput:PENDING_START] held=true direction=${this.selectedDirection ?? "none"}`,
+      );
+
+      // Right already has a chamber implementation, so if
+      // Right is the current selection it can commit now.
+      if (this.selectedDirection === "right") {
+        this.startAttack("right", true);
       } else {
+        // Other directions remain release-driven for now.
         layer.blendToWeight(0, 0.12);
       }
+
+      return;
+    }
+
+    // The recovery press was released while Attack A was
+    // finishing, so its direction was captured on that
+    // RELEASE and is now immutable.
+    console.log(
+      `[CombatInput:PENDING_START] held=false direction=${pendingDirection ?? "none"}`,
+    );
+
+    if (pendingDirection) {
+      this.startAttack(pendingDirection, false);
+    } else {
+      layer.blendToWeight(0, 0.12);
+    }
+  }
+
+  clearPendingAttack() {
+    this.pendingInputActive = false;
+    this.pendingAttackDirection = null;
+    this.pendingInputHeld = false;
+    this.pendingReleaseRequested = false;
+  }
+
+  resetCurrentAttackAfterFailure() {
+    this.clearWeaponPoseOffset();
+    this.clearRightChamberState();
+    this.clearPendingAttack();
+
+    this.state = "idle";
+    this.currentAttackDirection = null;
+    this.attackStateName = null;
+    this.attackStateSeen = false;
+    this.recoveryOpen = false;
+    this.attackCancelRequested = false;
+
+    if (
+      this.lmbPressOwner === "current" &&
+      this.app.mouse.isPressed(MOUSEBUTTON_LEFT)
+    ) {
+      this.lmbPressOwner = "rejected";
+    } else if (this.lmbPressOwner !== "rejected") {
+      this.lmbPressOwner = "none";
     }
   }
 
   isDirectionTrackingUnlocked() {
-    if (this.state !== "attacking") return true;
+    if (this.state !== "attacking") {
+      return true;
+    }
+
+    if (this.recoveryOpen) {
+      return true;
+    }
 
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
+
     return (
       layer?.activeState === this.attackStateName &&
       typeof layer.activeStateProgress === "number" &&
@@ -223,36 +540,95 @@ export class CombatController extends Script {
     );
   }
 
-  isReadyForNextAttack() {
+  updateRightChamber(layer) {
+    if (
+      this.currentAttackDirection !== "right" ||
+      layer.activeState !== "AttackRight" ||
+      this.rightChamberHolding ||
+      !this.rightChamberInputActive ||
+      this.rightReleaseRequested ||
+      typeof layer.activeStateProgress !== "number" ||
+      layer.activeStateProgress < this.rightChamberProgress
+    ) {
+      return;
+    }
+
+    this.rightChamberHoldTime = layer.activeStateCurrentTime;
+
+    this.rightChamberHolding = true;
+  }
+
+  releaseRightChamberInput() {
+    if (!this.rightChamberInputActive && !this.rightChamberHolding) {
+      return;
+    }
+
+    this.rightChamberInputActive = false;
+    this.rightReleaseRequested = true;
+    this.rightChamberHolding = false;
+    this.rightChamberHoldTime = null;
+  }
+
+  clearRightChamberState() {
+    this.rightChamberInputActive = false;
+    this.rightReleaseRequested = false;
+    this.rightChamberHolding = false;
+    this.rightChamberHoldTime = null;
+  }
+
+  pinRightChamberTime() {
+    if (
+      !this.rightChamberHolding ||
+      this.rightChamberHoldTime === null ||
+      this.currentAttackDirection !== "right"
+    ) {
+      return;
+    }
+
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
-    return (
-      layer?.activeState === this.attackStateName &&
-      typeof layer.activeStateProgress === "number" &&
-      layer.activeStateProgress >= this.nextAttackReadyProgress
-    );
+
+    if (layer?.activeState !== "AttackRight") {
+      return;
+    }
+
+    layer.activeStateCurrentTime = this.rightChamberHoldTime;
   }
 
   updateDirectionPreview(dt) {
-    if (!this.directionIndicator?.enabled) return;
+    if (!this.directionIndicator?.enabled) {
+      return;
+    }
 
     this.previewElapsed += dt;
-    if (this.previewElapsed <= this.previewHoldTime) return;
+
+    if (this.previewElapsed <= this.previewHoldTime) {
+      return;
+    }
 
     const fadeElapsed = this.previewElapsed - this.previewHoldTime;
+
     if (fadeElapsed >= this.previewFadeTime) {
       this.hideDirectionIndicator();
       return;
     }
 
     const element = this.directionIndicator.element;
-    if (element) element.opacity = 1 - fadeElapsed / this.previewFadeTime;
+
+    if (element) {
+      element.opacity = 1 - fadeElapsed / this.previewFadeTime;
+    }
   }
 
   showDirectionPreview(direction) {
     this.previewElapsed = 0;
+
     this.updateDirectionIndicator(direction);
+
     const element = this.directionIndicator?.element;
-    if (element) element.opacity = 1;
+
+    if (element) {
+      element.opacity = 1;
+    }
   }
 
   updateDirectionIndicator(direction) {
@@ -264,30 +640,43 @@ export class CombatController extends Script {
     if (!this.directionIndicator) {
       if (!this.didWarnMissingIndicator) {
         this.didWarnMissingIndicator = true;
+
         console.warn("[Combat] directionIndicator is not assigned.");
       }
+
       return;
     }
 
     const layout = INDICATOR_LAYOUT[direction];
+
     const screen = this.directionIndicator.parent?.screen;
+
     const resolution = screen?.referenceResolution;
+
     const width = resolution?.x ?? resolution?.[0] ?? 1280;
+
     const height = resolution?.y ?? resolution?.[1] ?? 720;
+
     this.directionIndicator.setLocalPosition(
       layout.x * width * this.horizontalOffsetFactor,
       layout.y * height * this.verticalOffsetFactor,
       0,
     );
+
     this.directionIndicator.setLocalEulerAngles(0, 0, layout.rotation);
+
     this.directionIndicator.enabled = true;
   }
 
   hideDirectionIndicator() {
-    if (this.directionIndicator) {
-      this.directionIndicator.enabled = false;
-      const element = this.directionIndicator.element;
-      if (element) element.opacity = 1;
+    if (!this.directionIndicator) return;
+
+    this.directionIndicator.enabled = false;
+
+    const element = this.directionIndicator.element;
+
+    if (element) {
+      element.opacity = 1;
     }
   }
 
@@ -295,8 +684,10 @@ export class CombatController extends Script {
     if (!this.weaponAnchor) {
       if (!this.didWarnMissingWeaponAnchor) {
         this.didWarnMissingWeaponAnchor = true;
+
         console.warn("[Combat] weaponAnchor is not assigned.");
       }
+
       return;
     }
 
@@ -312,23 +703,35 @@ export class CombatController extends Script {
     this.weaponAnchor?.fire("weapon:clearPose");
   }
 
-  startAttack(direction) {
+  startAttack(direction, rightChamberInputActive = false) {
+    this.clearRightChamberState();
+
+    if (direction === "right") {
+      this.rightChamberInputActive = rightChamberInputActive;
+
+      this.rightReleaseRequested = !rightChamberInputActive;
+    }
+
     this.state = "attacking";
     this.currentAttackDirection = direction;
+
     this.attackStateSeen = false;
+    this.attackStateName = null;
+    this.recoveryOpen = false;
+    this.attackCancelRequested = false;
+
     this.executeAttack();
   }
 
   executeAttack() {
     const direction = this.currentAttackDirection;
+
     const anim = this.animEntity?.anim;
+
     if (!anim) {
       console.warn(`[Combat] missing attack animation for: ${direction}`);
-      this.clearWeaponPoseOffset();
-      this.state = "idle";
-      this.currentAttackDirection = null;
-      this.attackStateName = null;
-      this.attackStateSeen = false;
+
+      this.resetCurrentAttackAfterFailure();
       return;
     }
 
@@ -336,11 +739,8 @@ export class CombatController extends Script {
 
     if (!combatLayer) {
       console.warn("[Combat] Combat animation layer is unavailable.");
-      this.clearWeaponPoseOffset();
-      this.state = "idle";
-      this.currentAttackDirection = null;
-      this.attackStateName = null;
-      this.attackStateSeen = false;
+
+      this.resetCurrentAttackAfterFailure();
       return;
     }
 
@@ -348,19 +748,19 @@ export class CombatController extends Script {
 
     if (!attack || !combatLayer.states.includes(attack.state)) {
       console.warn(`[Combat] attack unavailable for: ${direction}`);
-      this.clearWeaponPoseOffset();
-      this.state = "idle";
-      this.currentAttackDirection = null;
-      this.attackStateName = null;
-      this.attackStateSeen = false;
+
+      this.resetCurrentAttackAfterFailure();
       return;
     }
 
     this.attackStateName = attack.state;
+
     combatLayer.blendToWeight(1, 0.1);
 
     anim.setInteger("attackDirection", attack.index);
+
     this.entity.fire("combat:faceView");
+
     anim.setTrigger("attack");
 
     if (direction === "thrust") {
@@ -371,7 +771,10 @@ export class CombatController extends Script {
   }
 
   destroy() {
+    this.clearPendingAttack();
+    this.clearRightChamberState();
     this.clearWeaponPoseOffset();
+
     this.app.mouse.off(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
   }
 }
