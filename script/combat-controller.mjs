@@ -7,7 +7,7 @@ import {
   Vec3,
 } from "playcanvas";
 
-const COMBAT_DEBUG_VERSION = "generic-chamber-right-overhead-v1";
+const COMBAT_DEBUG_VERSION = "generic-chamber-right-overhead-thrust-v1";
 
 const INDICATOR_LAYOUT = {
   overhead: { x: 0, y: 1, rotation: 180 },
@@ -34,6 +34,7 @@ const ATTACKS = {
   thrust: {
     index: 3,
     state: "AttackThrust",
+    chamberProgressKey: "thrustChamberProgress",
   },
 };
 
@@ -61,7 +62,10 @@ export class CombatController extends Script {
   rightChamberProgress = 0.4;
 
   /** AttackOverhead progress at which a held input pins the Combat layer time. @attribute @type {number} */
-  overheadChamberProgress = 0.4;
+  overheadChamberProgress = 0.3;
+
+  /** AttackThrust progress at which a held input pins the Combat layer time. @attribute @type {number} */
+  thrustChamberProgress = 0.1;
 
   /** Fraction of screen width used for left/right arrow placement. @attribute @type {number} */
   horizontalOffsetFactor = 0.25;
@@ -78,7 +82,10 @@ export class CombatController extends Script {
   /** WeaponAnchor_R entity used to locate the bone attachment. @attribute @type {Entity} */
   weaponAnchor;
 
-  /** Local WeaponSocket_R Euler rotation during AttackThrust. @attribute @type {Vec3} */
+  /** Local WeaponSocket_R position correction during AttackThrust. @attribute @type {Vec3} */
+  thrustWeaponPositionOffset = new Vec3(0, 0, 0);
+
+  /** Local WeaponSocket_R Euler rotation correction during AttackThrust. @attribute @type {Vec3} */
   thrustWeaponEulerOffset = new Vec3(45, 0, 0);
 
   initialize() {
@@ -107,7 +114,7 @@ export class CombatController extends Script {
     this.ignoreLeftUntilReleased = false;
 
     // Generic chamber state.
-    // Right + Overhead are chamber-enabled in this milestone.
+    // Right + Overhead + Thrust are chamber-enabled.
     this.chamberInputActive = false;
     this.releaseRequested = false;
     this.chamberHolding = false;
@@ -205,11 +212,6 @@ export class CombatController extends Script {
     }
 
     if (this.state === "idle") {
-      // Accept the physical press but do not freeze direction yet.
-      //
-      // Quick attacks use the latest selected direction at release.
-      // A fresh gesture in a chamber-enabled direction can commit the
-      // held press before release.
       this.lmbPressOwner = "current";
 
       console.log("[CombatInput:CURRENT]");
@@ -253,8 +255,6 @@ export class CombatController extends Script {
       }
 
       case "pending": {
-        // DOWN occurred during valid recovery.
-        // Capture the final quick-attack direction on release.
         this.pendingInputHeld = false;
         this.pendingReleaseRequested = true;
 
@@ -281,7 +281,6 @@ export class CombatController extends Script {
         }
 
         if (this.state === "idle") {
-          // Quick attacks commit direction on release.
           const direction = this.selectedDirection;
 
           this.lmbPressOwner = "none";
@@ -293,7 +292,6 @@ export class CombatController extends Script {
           return;
         }
 
-        // An old release never becomes a new attack later.
         this.lmbPressOwner = "none";
         return;
       }
@@ -407,8 +405,6 @@ export class CombatController extends Script {
       console.log(`[Combat] selected direction: ${direction}`);
     }
 
-    // A fresh chamber-enabled gesture matters even if the persisted
-    // selectedDirection was already identical from the previous attack.
     if (
       this.isChamberEnabledDirection(direction) &&
       this.lmbPressOwner === "current" &&
@@ -511,10 +507,6 @@ export class CombatController extends Script {
     }
 
     if (pendingInputHeld && !pendingReleaseRequested) {
-      // Attack A finished while the accepted recovery press
-      // is still physically held.
-      //
-      // Direction remains live until the next attack commits.
       this.lmbPressOwner = "current";
 
       console.log(
@@ -524,14 +516,13 @@ export class CombatController extends Script {
       if (this.isChamberEnabledDirection(this.selectedDirection)) {
         this.startAttack(this.selectedDirection, true);
       } else {
-        // Left and Thrust remain release-driven for now.
+        // Left remains release-driven for now.
         layer.blendToWeight(0, 0.12);
       }
 
       return;
     }
 
-    // Released pending inputs captured their direction on that release.
     console.log(
       `[CombatInput:PENDING_START] held=false direction=${pendingDirection ?? "none"}`,
     );
@@ -630,6 +621,13 @@ export class CombatController extends Script {
   releaseChamberInput() {
     if (!this.chamberInputActive && !this.chamberHolding) {
       return;
+    }
+
+    // Keep the canonical/base sword grip while a held Thrust is chambered.
+    // The existing thrust correction is known-good for the released/full-reach
+    // portion, so apply it only when the held chamber is actually released.
+    if (this.currentAttackDirection === "thrust") {
+      this.applyThrustWeaponPose();
     }
 
     this.chamberInputActive = false;
@@ -768,6 +766,9 @@ export class CombatController extends Script {
 
     this.weaponAnchor.fire(
       "weapon:pose",
+      this.thrustWeaponPositionOffset.x,
+      this.thrustWeaponPositionOffset.y,
+      this.thrustWeaponPositionOffset.z,
       this.thrustWeaponEulerOffset.x,
       this.thrustWeaponEulerOffset.y,
       this.thrustWeaponEulerOffset.z,
@@ -840,7 +841,10 @@ export class CombatController extends Script {
 
     anim.setTrigger("attack");
 
-    if (direction === "thrust") {
+    // Quick/released Thrust uses the known-good thrust correction immediately.
+    // Held Thrust intentionally starts with the canonical/base socket grip;
+    // releaseChamberInput() applies the correction when LMB is released.
+    if (direction === "thrust" && this.releaseRequested) {
       this.applyThrustWeaponPose();
     }
 
