@@ -7,7 +7,7 @@ import {
   Vec3,
 } from "playcanvas";
 
-const COMBAT_DEBUG_VERSION = "attack-input-direction-release-v2";
+const COMBAT_DEBUG_VERSION = "generic-chamber-right-overhead-v1";
 
 const INDICATOR_LAYOUT = {
   overhead: { x: 0, y: 1, rotation: 180 },
@@ -17,10 +17,24 @@ const INDICATOR_LAYOUT = {
 };
 
 const ATTACKS = {
-  right: { index: 0, state: "AttackRight" },
-  left: { index: 1, state: "AttackLeft" },
-  overhead: { index: 2, state: "AttackOverhead" },
-  thrust: { index: 3, state: "AttackThrust" },
+  right: {
+    index: 0,
+    state: "AttackRight",
+    chamberProgressKey: "rightChamberProgress",
+  },
+  left: {
+    index: 1,
+    state: "AttackLeft",
+  },
+  overhead: {
+    index: 2,
+    state: "AttackOverhead",
+    chamberProgressKey: "overheadChamberProgress",
+  },
+  thrust: {
+    index: 3,
+    state: "AttackThrust",
+  },
 };
 
 const DIRECTION_DOMINANCE = 1.2;
@@ -30,26 +44,40 @@ export class CombatController extends Script {
 
   /** Minimum accumulated mouse movement before a direction is selected. @attribute @type {number} */
   directionThreshold = 18;
+
   /** Seconds a preview remains visible after its gesture completes. @attribute @type {number} */
   previewHoldTime = 0.25;
+
   /** Seconds the direction preview takes to fade out after its hold. @attribute @type {number} */
   previewFadeTime = 0.2;
+
   /** Attack progress at which mouse gestures can select a future attack direction. @attribute @type {number} */
   directionUnlockProgress = 0.25;
+
   /** Attack progress at which a new LMB press may buffer one next attack. @attribute @type {number} */
-  recoveryStartProgress = 0.7;
+  recoveryStartProgress = 0.5;
+
   /** AttackRight progress at which a held input pins the Combat layer time. @attribute @type {number} */
   rightChamberProgress = 0.4;
+
+  /** AttackOverhead progress at which a held input pins the Combat layer time. @attribute @type {number} */
+  overheadChamberProgress = 0.4;
+
   /** Fraction of screen width used for left/right arrow placement. @attribute @type {number} */
   horizontalOffsetFactor = 0.25;
+
   /** Fraction of screen height used for up/down arrow placement. @attribute @type {number} */
   verticalOffsetFactor = 0.2;
+
   /** Persistent scene UI entity used for the single direction arrow. @attribute @type {Entity} */
   directionIndicator;
+
   /** Entity containing the existing runtime Anim graph. @attribute @type {Entity} */
   animEntity;
+
   /** WeaponAnchor_R entity used to locate the bone attachment. @attribute @type {Entity} */
   weaponAnchor;
+
   /** Local WeaponSocket_R Euler rotation during AttackThrust. @attribute @type {Vec3} */
   thrustWeaponEulerOffset = new Vec3(45, 0, 0);
 
@@ -58,12 +86,13 @@ export class CombatController extends Script {
     this.selectedDirection = null;
     this.currentAttackDirection = null;
 
-    // Ownership of the currently physical LMB press:
+    // Ownership of the current physical LMB press:
     // none | current | pending | rejected.
     this.lmbPressOwner = "none";
 
-    // One buffered recovery press at most. Direction stays live while held and
-    // is captured only when that press releases or the next attack commits.
+    // At most one buffered recovery input.
+    // Its direction remains live while held and is captured on release
+    // or when the next held attack commits.
     this.pendingInputActive = false;
     this.pendingAttackDirection = null;
     this.pendingInputHeld = false;
@@ -77,21 +106,26 @@ export class CombatController extends Script {
     this.pointerLockWasActive = false;
     this.ignoreLeftUntilReleased = false;
 
-    this.rightChamberInputActive = false;
-    this.rightReleaseRequested = false;
-    this.rightChamberHolding = false;
-    this.rightChamberHoldTime = null;
+    // Generic chamber state.
+    // Right + Overhead are chamber-enabled in this milestone.
+    this.chamberInputActive = false;
+    this.releaseRequested = false;
+    this.chamberHolding = false;
+    this.chamberHoldTime = null;
 
     this.attackStateSeen = false;
     this.attackStateName = null;
+
     this.previewElapsed = 0;
     this.didWarnMissingIndicator = false;
     this.didWarnMissingWeaponAnchor = false;
 
     this.hideDirectionIndicator();
+
     this.app.mouse.on(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
 
     console.log(`[CombatVersion] ${COMBAT_DEBUG_VERSION}`);
+
     console.log("[Combat] initialized");
   }
 
@@ -106,7 +140,7 @@ export class CombatController extends Script {
     }
 
     this.updateAttackCycle();
-    this.pinRightChamberTime();
+    this.pinChamberTime();
     this.updateDirectionPreview(dt);
 
     if (this.state === "attacking" && !this.isDirectionTrackingUnlocked()) {
@@ -127,6 +161,7 @@ export class CombatController extends Script {
       if (!mouse.isPressed(MOUSEBUTTON_LEFT)) {
         this.ignoreLeftUntilReleased = false;
       }
+
       return;
     }
 
@@ -145,11 +180,8 @@ export class CombatController extends Script {
 
   handlePointerLockLost(mouse) {
     if (this.pointerLockWasActive) {
-      if (
-        this.currentAttackDirection === "right" &&
-        (this.rightChamberInputActive || this.rightChamberHolding)
-      ) {
-        this.cancelCurrentRightPreparation("pointer-lock-lost");
+      if (this.chamberInputActive || this.chamberHolding) {
+        this.cancelCurrentPreparation("pointer-lock-lost");
       }
 
       this.clearPendingAttack();
@@ -157,6 +189,7 @@ export class CombatController extends Script {
     }
 
     this.hideDirectionIndicator();
+
     this.directionDx = 0;
     this.directionDy = 0;
     this.pointerLockWasActive = false;
@@ -167,33 +200,43 @@ export class CombatController extends Script {
   }
 
   handleLmbDown() {
-    if (this.lmbPressOwner !== "none") return;
+    if (this.lmbPressOwner !== "none") {
+      return;
+    }
 
     if (this.state === "idle") {
-      // Accept the physical press, but do not freeze direction yet.
-      // Quick attacks use the latest selection on release. A fresh Right
-      // gesture while still held can commit into the Right chamber early.
+      // Accept the physical press but do not freeze direction yet.
+      //
+      // Quick attacks use the latest selected direction at release.
+      // A fresh gesture in a chamber-enabled direction can commit the
+      // held press before release.
       this.lmbPressOwner = "current";
+
       console.log("[CombatInput:CURRENT]");
+
       return;
     }
 
     if (this.state !== "attacking") {
       this.rejectCurrentLmbPress("invalid-state");
+
       return;
     }
 
     if (!this.recoveryOpen) {
       this.rejectCurrentLmbPress("before-recovery");
+
       return;
     }
 
     if (this.pendingInputActive) {
       this.rejectCurrentLmbPress("pending-already-exists");
+
       return;
     }
 
     this.lmbPressOwner = "pending";
+
     this.pendingInputActive = true;
     this.pendingAttackDirection = null;
     this.pendingInputHeld = true;
@@ -210,43 +253,47 @@ export class CombatController extends Script {
       }
 
       case "pending": {
-        // This press was valid because DOWN happened during recovery.
-        // Capture the final quick-attack direction on RELEASE.
+        // DOWN occurred during valid recovery.
+        // Capture the final quick-attack direction on release.
         this.pendingInputHeld = false;
         this.pendingReleaseRequested = true;
+
         this.pendingAttackDirection = this.selectedDirection;
+
         this.lmbPressOwner = "none";
 
         console.log(
           `[CombatInput:PENDING_RELEASE] direction=${this.pendingAttackDirection ?? "none"}`,
         );
+
         return;
       }
 
       case "current": {
         if (
           this.state === "attacking" &&
-          this.currentAttackDirection === "right" &&
-          (this.rightChamberInputActive || this.rightChamberHolding)
+          (this.chamberInputActive || this.chamberHolding)
         ) {
-          this.releaseRightChamberInput();
+          this.releaseChamberInput();
+
           this.lmbPressOwner = "none";
           return;
         }
 
         if (this.state === "idle") {
-          // Quick attacks commit the latest selected direction at RELEASE,
-          // not the direction that happened to be selected on LMB DOWN.
+          // Quick attacks commit direction on release.
           const direction = this.selectedDirection;
+
           this.lmbPressOwner = "none";
 
           if (direction) {
             this.startAttack(direction, false);
           }
+
           return;
         }
 
-        // Consume unmatched current releases. Never reinterpret them later.
+        // An old release never becomes a new attack later.
         this.lmbPressOwner = "none";
         return;
       }
@@ -259,6 +306,7 @@ export class CombatController extends Script {
 
   rejectCurrentLmbPress(reason) {
     this.lmbPressOwner = "rejected";
+
     console.log(`[CombatInput:REJECTED] reason=${reason}`);
   }
 
@@ -278,14 +326,13 @@ export class CombatController extends Script {
       }
 
       console.log("[CombatInput:CANCEL] pending");
+
       return;
     }
 
-    if (
-      this.currentAttackDirection === "right" &&
-      (this.rightChamberInputActive || this.rightChamberHolding)
-    ) {
-      this.cancelCurrentRightPreparation("rmb");
+    if (this.chamberInputActive || this.chamberHolding) {
+      this.cancelCurrentPreparation("rmb");
+
       return;
     }
 
@@ -298,11 +345,13 @@ export class CombatController extends Script {
     }
   }
 
-  cancelCurrentRightPreparation(reason) {
+  cancelCurrentPreparation(reason) {
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
-    const mouse = this.app.mouse;
 
-    this.clearRightChamberState();
+    const mouse = this.app.mouse;
+    const direction = this.currentAttackDirection;
+
+    this.clearChamberState();
 
     this.lmbPressOwner = mouse.isPressed(MOUSEBUTTON_LEFT)
       ? "rejected"
@@ -317,7 +366,9 @@ export class CombatController extends Script {
       this.resetCurrentAttackAfterFailure();
     }
 
-    console.log(`[CombatInput:CANCEL] current=right reason=${reason}`);
+    console.log(
+      `[CombatInput:CANCEL] current=${direction ?? "none"} reason=${reason}`,
+    );
   }
 
   onMouseMove(event) {
@@ -350,23 +401,21 @@ export class CombatController extends Script {
 
     if (selectionChanged) {
       this.selectedDirection = direction;
+
       this.showDirectionPreview(direction);
 
       console.log(`[Combat] selected direction: ${direction}`);
     }
 
-    // Important:
-    // even if selectedDirection was already Right from the previous attack,
-    // this fresh Right gesture is still meaningful while LMB is held.
-    //
-    // It commits the current held press into the proven Right chamber.
+    // A fresh chamber-enabled gesture matters even if the persisted
+    // selectedDirection was already identical from the previous attack.
     if (
-      direction === "right" &&
+      this.isChamberEnabledDirection(direction) &&
       this.lmbPressOwner === "current" &&
       this.state === "idle" &&
       this.app.mouse.isPressed(MOUSEBUTTON_LEFT)
     ) {
-      this.startAttack("right", true);
+      this.startAttack(direction, true);
     }
   }
 
@@ -386,7 +435,9 @@ export class CombatController extends Script {
   }
 
   updateAttackCycle() {
-    if (this.state !== "attacking") return;
+    if (this.state !== "attacking") {
+      return;
+    }
 
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
 
@@ -410,7 +461,7 @@ export class CombatController extends Script {
         );
       }
 
-      this.updateRightChamber(layer);
+      this.updateChamber(layer);
       return;
     }
 
@@ -434,13 +485,16 @@ export class CombatController extends Script {
 
     const pendingReleaseRequested = this.pendingReleaseRequested;
 
-    this.clearRightChamberState();
+    this.clearChamberState();
     this.clearWeaponPoseOffset();
 
     this.state = "idle";
+
     this.currentAttackDirection = null;
+
     this.attackStateSeen = false;
     this.attackStateName = null;
+
     this.recoveryOpen = false;
     this.attackCancelRequested = false;
 
@@ -452,6 +506,7 @@ export class CombatController extends Script {
 
     if (wasCanceled || !hadPendingInput) {
       layer.blendToWeight(0, 0.12);
+
       return;
     }
 
@@ -459,29 +514,24 @@ export class CombatController extends Script {
       // Attack A finished while the accepted recovery press
       // is still physically held.
       //
-      // Direction is still live. It has NOT been frozen at
-      // the original LMB-down moment.
+      // Direction remains live until the next attack commits.
       this.lmbPressOwner = "current";
 
       console.log(
         `[CombatInput:PENDING_START] held=true direction=${this.selectedDirection ?? "none"}`,
       );
 
-      // Right already has a chamber implementation, so if
-      // Right is the current selection it can commit now.
-      if (this.selectedDirection === "right") {
-        this.startAttack("right", true);
+      if (this.isChamberEnabledDirection(this.selectedDirection)) {
+        this.startAttack(this.selectedDirection, true);
       } else {
-        // Other directions remain release-driven for now.
+        // Left and Thrust remain release-driven for now.
         layer.blendToWeight(0, 0.12);
       }
 
       return;
     }
 
-    // The recovery press was released while Attack A was
-    // finishing, so its direction was captured on that
-    // RELEASE and is now immutable.
+    // Released pending inputs captured their direction on that release.
     console.log(
       `[CombatInput:PENDING_START] held=false direction=${pendingDirection ?? "none"}`,
     );
@@ -502,13 +552,15 @@ export class CombatController extends Script {
 
   resetCurrentAttackAfterFailure() {
     this.clearWeaponPoseOffset();
-    this.clearRightChamberState();
+    this.clearChamberState();
     this.clearPendingAttack();
 
     this.state = "idle";
+
     this.currentAttackDirection = null;
     this.attackStateName = null;
     this.attackStateSeen = false;
+
     this.recoveryOpen = false;
     this.attackCancelRequested = false;
 
@@ -540,58 +592,79 @@ export class CombatController extends Script {
     );
   }
 
-  updateRightChamber(layer) {
+  isChamberEnabledDirection(direction) {
+    return Boolean(direction && ATTACKS[direction]?.chamberProgressKey);
+  }
+
+  getChamberProgress(direction) {
+    const progressKey = direction && ATTACKS[direction]?.chamberProgressKey;
+
+    return progressKey ? this[progressKey] : null;
+  }
+
+  updateChamber(layer) {
+    const direction = this.currentAttackDirection;
+
+    const attack = direction && ATTACKS[direction];
+
+    const chamberProgress = this.getChamberProgress(direction);
+
     if (
-      this.currentAttackDirection !== "right" ||
-      layer.activeState !== "AttackRight" ||
-      this.rightChamberHolding ||
-      !this.rightChamberInputActive ||
-      this.rightReleaseRequested ||
+      !attack?.chamberProgressKey ||
+      layer.activeState !== attack.state ||
+      this.chamberHolding ||
+      !this.chamberInputActive ||
+      this.releaseRequested ||
       typeof layer.activeStateProgress !== "number" ||
-      layer.activeStateProgress < this.rightChamberProgress
+      typeof chamberProgress !== "number" ||
+      layer.activeStateProgress < chamberProgress
     ) {
       return;
     }
 
-    this.rightChamberHoldTime = layer.activeStateCurrentTime;
+    this.chamberHoldTime = layer.activeStateCurrentTime;
 
-    this.rightChamberHolding = true;
+    this.chamberHolding = true;
   }
 
-  releaseRightChamberInput() {
-    if (!this.rightChamberInputActive && !this.rightChamberHolding) {
+  releaseChamberInput() {
+    if (!this.chamberInputActive && !this.chamberHolding) {
       return;
     }
 
-    this.rightChamberInputActive = false;
-    this.rightReleaseRequested = true;
-    this.rightChamberHolding = false;
-    this.rightChamberHoldTime = null;
+    this.chamberInputActive = false;
+    this.releaseRequested = true;
+    this.chamberHolding = false;
+    this.chamberHoldTime = null;
   }
 
-  clearRightChamberState() {
-    this.rightChamberInputActive = false;
-    this.rightReleaseRequested = false;
-    this.rightChamberHolding = false;
-    this.rightChamberHoldTime = null;
+  clearChamberState() {
+    this.chamberInputActive = false;
+    this.releaseRequested = false;
+    this.chamberHolding = false;
+    this.chamberHoldTime = null;
   }
 
-  pinRightChamberTime() {
+  pinChamberTime() {
+    const direction = this.currentAttackDirection;
+
+    const attack = direction && ATTACKS[direction];
+
     if (
-      !this.rightChamberHolding ||
-      this.rightChamberHoldTime === null ||
-      this.currentAttackDirection !== "right"
+      !attack?.chamberProgressKey ||
+      !this.chamberHolding ||
+      this.chamberHoldTime === null
     ) {
       return;
     }
 
     const layer = this.animEntity?.anim?.findAnimationLayer("Combat");
 
-    if (layer?.activeState !== "AttackRight") {
+    if (layer?.activeState !== attack.state) {
       return;
     }
 
-    layer.activeStateCurrentTime = this.rightChamberHoldTime;
+    layer.activeStateCurrentTime = this.chamberHoldTime;
   }
 
   updateDirectionPreview(dt) {
@@ -669,7 +742,9 @@ export class CombatController extends Script {
   }
 
   hideDirectionIndicator() {
-    if (!this.directionIndicator) return;
+    if (!this.directionIndicator) {
+      return;
+    }
 
     this.directionIndicator.enabled = false;
 
@@ -703,20 +778,22 @@ export class CombatController extends Script {
     this.weaponAnchor?.fire("weapon:clearPose");
   }
 
-  startAttack(direction, rightChamberInputActive = false) {
-    this.clearRightChamberState();
+  startAttack(direction, chamberInputActive = false) {
+    this.clearChamberState();
 
-    if (direction === "right") {
-      this.rightChamberInputActive = rightChamberInputActive;
+    if (this.isChamberEnabledDirection(direction)) {
+      this.chamberInputActive = chamberInputActive;
 
-      this.rightReleaseRequested = !rightChamberInputActive;
+      this.releaseRequested = !chamberInputActive;
     }
 
     this.state = "attacking";
+
     this.currentAttackDirection = direction;
 
     this.attackStateSeen = false;
     this.attackStateName = null;
+
     this.recoveryOpen = false;
     this.attackCancelRequested = false;
 
@@ -772,7 +849,7 @@ export class CombatController extends Script {
 
   destroy() {
     this.clearPendingAttack();
-    this.clearRightChamberState();
+    this.clearChamberState();
     this.clearWeaponPoseOffset();
 
     this.app.mouse.off(Mouse.EVENT_MOUSEMOVE, this.onMouseMove, this);
