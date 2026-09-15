@@ -21,16 +21,35 @@ export class BoneAttachment extends Script {
       return;
     }
 
+    // Canonical weapon grip authored in the Editor.
+    // Every temporary combat pose is applied relative to these values.
     this.baseSocketPosition = this.weaponSocket.getLocalPosition().clone();
+
     this.baseSocketRotation = this.weaponSocket.getLocalRotation().clone();
+
     this.baseSocketScale = this.weaponSocket.getLocalScale().clone();
 
     this.entity.on("weapon:pose", this.onWeaponPose, this);
+
     this.entity.on("weapon:clearPose", this.onClearWeaponPose, this);
   }
 
-  onWeaponPose(x, y, z) {
-    this.setWeaponEulerOffset(x, y, z);
+  onWeaponPose(
+    positionX,
+    positionY,
+    positionZ,
+    rotationX,
+    rotationY,
+    rotationZ,
+  ) {
+    this.setWeaponPoseOffset(
+      positionX,
+      positionY,
+      positionZ,
+      rotationX,
+      rotationY,
+      rotationZ,
+    );
   }
 
   onClearWeaponPose() {
@@ -43,21 +62,49 @@ export class BoneAttachment extends Script {
     }
 
     this.weaponSocket.setLocalPosition(this.baseSocketPosition.clone());
+
     this.weaponSocket.setLocalRotation(this.baseSocketRotation.clone());
+
     this.weaponSocket.setLocalScale(this.baseSocketScale.clone());
+
     return true;
   }
 
-  setWeaponEulerOffset(x, y, z) {
+  setWeaponPoseOffset(
+    positionX = 0,
+    positionY = 0,
+    positionZ = 0,
+    rotationX = 0,
+    rotationY = 0,
+    rotationZ = 0,
+  ) {
     if (!this.restoreWeaponSocketBase()) {
       return false;
     }
 
-    const localOffsetRotation = new Quat().setFromEulerAngles(x, y, z);
+    // Position correction is relative to the canonical socket position,
+    // expressed in WeaponSocket_R's parent-local coordinate system.
+    const composedPosition = this.baseSocketPosition.clone();
+
+    composedPosition.x += positionX;
+    composedPosition.y += positionY;
+    composedPosition.z += positionZ;
+
+    this.weaponSocket.setLocalPosition(composedPosition);
+
+    // Rotation correction is composed on top of the canonical socket grip.
+    const localOffsetRotation = new Quat().setFromEulerAngles(
+      rotationX,
+      rotationY,
+      rotationZ,
+    );
+
     const composedRotation = this.baseSocketRotation
       .clone()
       .mul(localOffsetRotation);
+
     this.weaponSocket.setLocalRotation(composedRotation);
+
     return true;
   }
 
@@ -71,11 +118,13 @@ export class BoneAttachment extends Script {
     }
 
     this.entity.setPosition(this.target.getPosition());
+
     this.entity.setRotation(this.target.getRotation());
   }
 
   destroy() {
     this.entity.off("weapon:pose", this.onWeaponPose, this);
+
     this.entity.off("weapon:clearPose", this.onClearWeaponPose, this);
   }
 }

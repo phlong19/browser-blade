@@ -78,7 +78,10 @@ export class CombatController extends Script {
   /** WeaponAnchor_R entity used to locate the bone attachment. @attribute @type {Entity} */
   weaponAnchor;
 
-  /** Local WeaponSocket_R Euler rotation during AttackThrust. @attribute @type {Vec3} */
+  /** Local WeaponSocket_R position correction during AttackThrust. @attribute @type {Vec3} */
+  thrustWeaponPositionOffset = new Vec3(0, 0, 0);
+
+  /** Local WeaponSocket_R Euler rotation correction during AttackThrust. @attribute @type {Vec3} */
   thrustWeaponEulerOffset = new Vec3(45, 0, 0);
 
   initialize() {
@@ -768,6 +771,11 @@ export class CombatController extends Script {
 
     this.weaponAnchor.fire(
       "weapon:pose",
+
+      this.thrustWeaponPositionOffset.x,
+      this.thrustWeaponPositionOffset.y,
+      this.thrustWeaponPositionOffset.z,
+
       this.thrustWeaponEulerOffset.x,
       this.thrustWeaponEulerOffset.y,
       this.thrustWeaponEulerOffset.z,
