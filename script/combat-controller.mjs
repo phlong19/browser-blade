@@ -129,6 +129,8 @@ export class CombatController extends Script {
 
     this.attackStateSeen = false;
     this.attackStateName = null;
+    this.attackReleaseFired = false;
+    this.attackEndFired = false;
 
     this.previewElapsed = 0;
 
@@ -479,6 +481,12 @@ export class CombatController extends Script {
     if (layer.activeState === this.attackStateName) {
       this.attackStateSeen = true;
 
+      // Quick attacks are released when their animation becomes active.
+      // Held chamber attacks fire at their explicit LMB release instead.
+      if (this.releaseRequested) {
+        this.fireAttackRelease();
+      }
+
       if (
         !this.recoveryOpen &&
         typeof layer.activeStateProgress === "number" &&
@@ -508,6 +516,8 @@ export class CombatController extends Script {
   completeCurrentAttack(layer) {
     const wasCanceled = this.attackCancelRequested;
 
+    const direction = this.currentAttackDirection;
+
     const hadPendingInput = this.pendingInputActive;
 
     const pendingDirection = this.pendingAttackDirection;
@@ -533,6 +543,8 @@ export class CombatController extends Script {
     this.attackCancelRequested = false;
 
     this.clearPendingAttack();
+
+    this.fireAttackEnd(direction);
 
     console.log(
       wasCanceled ? "[Combat] attack canceled" : "[Combat] attack complete",
@@ -582,6 +594,8 @@ export class CombatController extends Script {
   }
 
   resetCurrentAttackAfterFailure() {
+    const direction = this.currentAttackDirection;
+
     this.clearWeaponPoseOffset();
 
     this.clearChamberState();
@@ -599,6 +613,8 @@ export class CombatController extends Script {
     this.recoveryOpen = false;
 
     this.attackCancelRequested = false;
+
+    this.fireAttackEnd(direction);
 
     if (
       this.lmbPressOwner === "current" &&
@@ -680,6 +696,28 @@ export class CombatController extends Script {
     this.chamberHolding = false;
 
     this.chamberHoldTime = null;
+
+    this.fireAttackRelease();
+  }
+
+  fireAttackRelease() {
+    if (this.attackReleaseFired || !this.currentAttackDirection) {
+      return;
+    }
+
+    this.attackReleaseFired = true;
+
+    this.entity.fire("combat:release", this.currentAttackDirection);
+  }
+
+  fireAttackEnd(direction) {
+    if (this.attackEndFired || !direction) {
+      return;
+    }
+
+    this.attackEndFired = true;
+
+    this.entity.fire("combat:attackEnd", direction);
   }
 
   clearChamberState() {
@@ -894,6 +932,10 @@ export class CombatController extends Script {
     this.attackStateSeen = false;
 
     this.attackStateName = null;
+
+    this.attackReleaseFired = false;
+
+    this.attackEndFired = false;
 
     this.recoveryOpen = false;
 
