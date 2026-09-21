@@ -7,7 +7,7 @@ import {
   Vec3,
 } from "playcanvas";
 
-const COMBAT_DEBUG_VERSION = "generic-chamber-all-directions-left-release-v1";
+const COMBAT_DEBUG_VERSION = "timed-hit-windows-v1";
 
 const INDICATOR_LAYOUT = {
   overhead: { x: 0, y: 1, rotation: 180 },
@@ -21,24 +21,32 @@ const ATTACKS = {
     index: 0,
     state: "AttackRight",
     chamberProgressKey: "rightChamberProgress",
+    hitWindowStartKey: "rightHitWindowStart",
+    hitWindowEndKey: "rightHitWindowEnd",
   },
 
   left: {
     index: 1,
     state: "AttackLeft",
     chamberProgressKey: "leftChamberProgress",
+    hitWindowStartKey: "leftHitWindowStart",
+    hitWindowEndKey: "leftHitWindowEnd",
   },
 
   overhead: {
     index: 2,
     state: "AttackOverhead",
     chamberProgressKey: "overheadChamberProgress",
+    hitWindowStartKey: "overheadHitWindowStart",
+    hitWindowEndKey: "overheadHitWindowEnd",
   },
 
   thrust: {
     index: 3,
     state: "AttackThrust",
     chamberProgressKey: "thrustChamberProgress",
+    hitWindowStartKey: "thrustHitWindowStart",
+    hitWindowEndKey: "thrustHitWindowEnd",
   },
 };
 
@@ -73,6 +81,30 @@ export class CombatController extends Script {
 
   /** AttackThrust progress at which a held input pins the Combat layer time. @attribute @type {number} */
   thrustChamberProgress = 0.1;
+
+  /** Normalized AttackRight progress at which the sword hit window opens. @attribute @type {number} */
+  rightHitWindowStart = 0.45;
+
+  /** Normalized AttackRight progress at which the sword hit window closes. @attribute @type {number} */
+  rightHitWindowEnd = 0.75;
+
+  /** Normalized AttackLeft progress at which the sword hit window opens. @attribute @type {number} */
+  leftHitWindowStart = 0.4;
+
+  /** Normalized AttackLeft progress at which the sword hit window closes. @attribute @type {number} */
+  leftHitWindowEnd = 0.72;
+
+  /** Normalized AttackOverhead progress at which the sword hit window opens. @attribute @type {number} */
+  overheadHitWindowStart = 0.38;
+
+  /** Normalized AttackOverhead progress at which the sword hit window closes. @attribute @type {number} */
+  overheadHitWindowEnd = 0.72;
+
+  /** Normalized AttackThrust progress at which the sword hit window opens. @attribute @type {number} */
+  thrustHitWindowStart = 0.25;
+
+  /** Normalized AttackThrust progress at which the sword hit window closes. @attribute @type {number} */
+  thrustHitWindowEnd = 0.65;
 
   /** Fraction of screen width used for left/right arrow placement. @attribute @type {number} */
   horizontalOffsetFactor = 0.25;
@@ -131,6 +163,8 @@ export class CombatController extends Script {
     this.attackStateName = null;
     this.attackReleaseFired = false;
     this.attackEndFired = false;
+    this.hitWindowOpen = false;
+    this.hitWindowStarted = false;
 
     this.previewElapsed = 0;
 
@@ -374,6 +408,8 @@ export class CombatController extends Script {
 
     const direction = this.currentAttackDirection;
 
+    this.closeHitWindow(direction, reason);
+
     this.clearChamberState();
 
     // Defensive cleanup for release-specific weapon poses.
@@ -487,6 +523,8 @@ export class CombatController extends Script {
         this.fireAttackRelease();
       }
 
+      this.updateHitWindow(layer);
+
       if (
         !this.recoveryOpen &&
         typeof layer.activeStateProgress === "number" &&
@@ -517,6 +555,11 @@ export class CombatController extends Script {
     const wasCanceled = this.attackCancelRequested;
 
     const direction = this.currentAttackDirection;
+
+    this.closeHitWindow(
+      direction,
+      wasCanceled ? "canceled" : "attack-complete",
+    );
 
     const hadPendingInput = this.pendingInputActive;
 
@@ -596,6 +639,8 @@ export class CombatController extends Script {
   resetCurrentAttackAfterFailure() {
     const direction = this.currentAttackDirection;
 
+    this.closeHitWindow(direction, "failure");
+
     this.clearWeaponPoseOffset();
 
     this.clearChamberState();
@@ -652,6 +697,74 @@ export class CombatController extends Script {
     const progressKey = direction && ATTACKS[direction]?.chamberProgressKey;
 
     return progressKey ? this[progressKey] : null;
+  }
+
+  getHitWindow(direction) {
+    const attack = direction && ATTACKS[direction];
+    const rawStart = this[attack?.hitWindowStartKey];
+    const rawEnd = this[attack?.hitWindowEndKey];
+    const start = Number.isFinite(rawStart)
+      ? Math.min(1, Math.max(0, rawStart))
+      : 0;
+    const end = Number.isFinite(rawEnd)
+      ? Math.min(1, Math.max(start, rawEnd))
+      : start;
+
+    return { start, end };
+  }
+
+  updateHitWindow(layer) {
+    const direction = this.currentAttackDirection;
+    const attack = direction && ATTACKS[direction];
+    const progress = layer.activeStateProgress;
+
+    if (
+      !this.attackReleaseFired ||
+      !attack ||
+      layer.activeState !== attack.state ||
+      typeof progress !== "number"
+    ) {
+      return;
+    }
+
+    const { start, end } = this.getHitWindow(direction);
+
+    if (!this.hitWindowStarted && progress >= start) {
+      this.hitWindowStarted = true;
+      this.hitWindowOpen = true;
+
+      this.entity.fire("combat:hitWindowStart", direction);
+
+      console.log(
+        `[CombatHitWindow:start] direction=${direction} progress=${progress.toFixed(3)}`,
+      );
+    }
+
+    if (this.hitWindowOpen && progress >= end) {
+      this.closeHitWindow(direction, null, progress);
+    }
+  }
+
+  closeHitWindow(direction, reason = null, progress = null) {
+    if (!this.hitWindowOpen || !direction) {
+      return;
+    }
+
+    this.hitWindowOpen = false;
+
+    this.entity.fire("combat:hitWindowEnd", direction);
+
+    if (reason) {
+      console.log(
+        `[CombatHitWindow:end] direction=${direction} reason=${reason}`,
+      );
+
+      return;
+    }
+
+    console.log(
+      `[CombatHitWindow:end] direction=${direction} progress=${progress.toFixed(3)}`,
+    );
   }
 
   updateChamber(layer) {
@@ -936,6 +1049,10 @@ export class CombatController extends Script {
     this.attackReleaseFired = false;
 
     this.attackEndFired = false;
+
+    this.hitWindowOpen = false;
+
+    this.hitWindowStarted = false;
 
     this.recoveryOpen = false;
 
