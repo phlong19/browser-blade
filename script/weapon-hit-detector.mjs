@@ -1,6 +1,6 @@
 import { Color, Script, Entity, Vec3 } from "playcanvas";
 
-const WEAPON_HIT_DETECTOR_VERSION = "sweep-diagnostic-v1";
+const WEAPON_HIT_DETECTOR_VERSION = "timed-window-v2";
 const ACTIVE_BLADE_DEBUG_COLOR = new Color(1, 0.8, 0);
 
 export class WeaponHitDetector extends Script {
@@ -25,10 +25,9 @@ export class WeaponHitDetector extends Script {
     this.previousSamplePositions = [];
     this.currentSamplePositions = [];
     this.swordRoot = null;
-    this.resetSwingDiagnostics();
 
-    this.entity.on("combat:release", this.onCombatRelease, this);
-    this.entity.on("combat:attackEnd", this.onCombatAttackEnd, this);
+    this.entity.on("combat:hitWindowStart", this.onHitWindowStart, this);
+    this.entity.on("combat:hitWindowEnd", this.onHitWindowEnd, this);
 
     this.syncSamplePositions();
 
@@ -46,34 +45,24 @@ export class WeaponHitDetector extends Script {
     }
   }
 
-  onCombatRelease(direction) {
+  onHitWindowStart(direction) {
     this.activeAttackDirection = direction;
     this.hitEntities.clear();
-    this.resetSwingDiagnostics();
-    this.receivedRelease = true;
     this.swordRoot = this.findSwordRoot();
     this.syncSamplePositions();
     this.sweepActive = true;
-
-    console.log(`[WeaponSweep:release] direction=${direction}`);
   }
 
-  onCombatAttackEnd(direction) {
-    console.log(`[WeaponSweep:end] direction=${direction}`);
-
-    if (
-      this.receivedRelease &&
-      this.activeFrameCount > 0 &&
-      this.rawHitCount === 0
-    ) {
-      console.warn(`[WeaponSweep:noRawHits] direction=${direction}`);
+  onHitWindowEnd(direction) {
+    if (direction !== this.activeAttackDirection) {
+      return;
     }
 
     this.sweepActive = false;
     this.activeAttackDirection = null;
     this.hitEntities.clear();
     this.syncSamplePositions();
-    this.resetSwingDiagnostics();
+    this.swordRoot = null;
   }
 
   postUpdate() {
@@ -97,16 +86,6 @@ export class WeaponHitDetector extends Script {
       false,
     );
 
-    this.activeFrameCount += 1;
-
-    if (!this.didLogFirstActiveFrame) {
-      this.didLogFirstActiveFrame = true;
-
-      console.log(
-        `[WeaponSweep:firstFrame] direction=${this.activeAttackDirection} base=${this.formatPosition(basePosition)} tip=${this.formatPosition(tipPosition)} samples=${this.getSampleCount()}`,
-      );
-    }
-
     this.populateCurrentSamplePositions();
 
     for (let index = 0; index < this.currentSamplePositions.length; index += 1) {
@@ -117,19 +96,6 @@ export class WeaponHitDetector extends Script {
     }
 
     this.copyCurrentToPrevious();
-  }
-
-  resetSwingDiagnostics() {
-    this.didLogFirstActiveFrame = false;
-    this.rawHitEntities = new Set();
-    this.filteredHitEntities = new Set();
-    this.rawHitCount = 0;
-    this.activeFrameCount = 0;
-    this.receivedRelease = false;
-  }
-
-  formatPosition(position) {
-    return `(${position.x.toFixed(3)},${position.y.toFixed(3)},${position.z.toFixed(3)})`;
   }
 
   hasBladeMarkers() {
@@ -196,31 +162,6 @@ export class WeaponHitDetector extends Script {
   }
 
   raycastSample(previousPosition, currentPosition) {
-    const rawHits = this.app.systems.rigidbody.raycastAll(
-      previousPosition,
-      currentPosition,
-    );
-
-    if (rawHits.length > 0) {
-      this.rawHitCount += rawHits.length;
-    }
-
-    for (const rawHit of rawHits) {
-      const target = rawHit.entity;
-
-      if (!target) {
-        continue;
-      }
-
-      this.logRawHit(target);
-
-      const filterReason = this.getFilterReason(target);
-
-      if (filterReason) {
-        this.logFilteredHit(target, filterReason);
-      }
-    }
-
     const hits = this.app.systems.rigidbody.raycastAll(
       previousPosition,
       currentPosition,
@@ -241,54 +182,14 @@ export class WeaponHitDetector extends Script {
 
     this.hitEntities.add(closestHit);
 
+    const progress = this.entity.script?.combatController?.currentAttackProgress;
+    const progressSuffix = Number.isFinite(progress)
+      ? ` progress=${progress.toFixed(3)}`
+      : "";
+
     console.log(
-      `[WeaponHit] direction=${this.activeAttackDirection} target=${closestHit.name}`,
+      `[WeaponHit] direction=${this.activeAttackDirection} target=${closestHit.name}${progressSuffix}`,
     );
-  }
-
-  logRawHit(target) {
-    if (this.rawHitEntities.has(target)) {
-      return;
-    }
-
-    this.rawHitEntities.add(target);
-
-    console.log(`[WeaponSweep:rawHit] entity=${target.name}`);
-  }
-
-  logFilteredHit(target, reason) {
-    if (this.filteredHitEntities.has(target)) {
-      return;
-    }
-
-    this.filteredHitEntities.add(target);
-
-    console.log(`[WeaponSweep:filtered] entity=${target.name} reason=${reason}`);
-  }
-
-  getFilterReason(target) {
-    const owner = this.ownerEntity ?? this.entity;
-
-    if (this.isInHierarchy(target, owner)) {
-      return "owner";
-    }
-
-    if (this.isInHierarchy(target, this.swordRoot)) {
-      return "weaponHierarchy";
-    }
-
-    if (
-      this.isInHierarchy(target, this.bladeBase) ||
-      this.isInHierarchy(target, this.bladeTip)
-    ) {
-      return "weaponMarker";
-    }
-
-    if (this.hitEntities.has(target)) {
-      return "alreadyHit";
-    }
-
-    return null;
   }
 
   shouldIgnoreEntity(target) {
@@ -333,13 +234,12 @@ export class WeaponHitDetector extends Script {
   }
 
   destroy() {
-    this.entity.off("combat:release", this.onCombatRelease, this);
-    this.entity.off("combat:attackEnd", this.onCombatAttackEnd, this);
+    this.entity.off("combat:hitWindowStart", this.onHitWindowStart, this);
+    this.entity.off("combat:hitWindowEnd", this.onHitWindowEnd, this);
 
     this.sweepActive = false;
     this.activeAttackDirection = null;
     this.hitEntities.clear();
-    this.resetSwingDiagnostics();
     this.previousSamplePositions.length = 0;
     this.currentSamplePositions.length = 0;
     this.swordRoot = null;
