@@ -166,30 +166,94 @@ export class WeaponHitDetector extends Script {
       previousPosition,
       currentPosition,
       {
-        filterCallback: (target) => {
-          return (
-            !this.shouldIgnoreEntity(target) && !this.hitEntities.has(target)
-          );
-        },
+        filterCallback: (target) => !this.shouldIgnoreEntity(target),
         sort: true,
       },
     );
-    const closestHit = hits[0]?.entity;
+    const acceptedHit = hits.find((hit) => {
+      const resolution = this.resolveCombatTarget(hit.entity);
 
-    if (!closestHit) {
+      return resolution && !this.hitEntities.has(resolution.target);
+    });
+
+    if (!acceptedHit) {
       return;
     }
 
-    this.hitEntities.add(closestHit);
+    const hitEntity = acceptedHit.entity;
+    const { target, zone } = this.resolveCombatTarget(hitEntity);
+    const hitInfo = this.createHitInfo(acceptedHit, zone);
+
+    this.hitEntities.add(target);
 
     const progress = this.entity.script?.combatController?.currentAttackProgress;
     const progressSuffix = Number.isFinite(progress)
       ? ` progress=${progress.toFixed(3)}`
       : "";
+    const zoneSuffix = zone ? ` zone=${zone}` : "";
 
     console.log(
-      `[WeaponHit] direction=${this.activeAttackDirection} target=${closestHit.name}${progressSuffix}`,
+      `[WeaponHit] direction=${this.activeAttackDirection} target=${target.name}${zoneSuffix}${progressSuffix}`,
     );
+
+    this.entity.fire(
+      "combat:weaponHit",
+      target,
+      this.activeAttackDirection,
+      hitInfo,
+    );
+  }
+
+  resolveCombatTarget(hitEntity) {
+    const hurtbox = hitEntity?.script?.combatHurtbox;
+
+    if (hurtbox?.ownerEntity) {
+      return {
+        target: hurtbox.ownerEntity,
+        zone: hurtbox.zone,
+      };
+    }
+
+    if (hitEntity?.script?.damageable) {
+      return {
+        target: hitEntity,
+        zone: null,
+      };
+    }
+
+    return null;
+  }
+
+  createHitInfo(hit, zone) {
+    const hitInfo = {
+      hitEntity: hit.entity,
+      zone,
+    };
+    const point = this.copyRaycastVector(hit.point);
+    const normal = this.copyRaycastVector(hit.normal);
+
+    if (point) {
+      hitInfo.point = point;
+    }
+
+    if (normal) {
+      hitInfo.normal = normal;
+    }
+
+    return hitInfo;
+  }
+
+  copyRaycastVector(vector) {
+    if (
+      !vector ||
+      !Number.isFinite(vector.x) ||
+      !Number.isFinite(vector.y) ||
+      !Number.isFinite(vector.z)
+    ) {
+      return null;
+    }
+
+    return new Vec3(vector.x, vector.y, vector.z);
   }
 
   shouldIgnoreEntity(target) {
