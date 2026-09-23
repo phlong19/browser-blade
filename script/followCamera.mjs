@@ -14,6 +14,9 @@ export class FollowCamera extends Script {
   /** Distance from CameraTarget. @attribute @type {number} */
   distance = 2.6;
 
+  /** Follow position half-life in seconds. Use 0 to follow instantly. @attribute @type {number} */
+  followHalfLife = 0.035;
+
   /** Starting yaw around CameraTarget, in degrees. @attribute @type {number} */
   initialYaw = 0;
 
@@ -51,6 +54,8 @@ export class FollowCamera extends Script {
 
   initialize() {
     this.offset = new Vec3();
+    this.followPosition = new Vec3();
+    this.followedTarget = null;
 
     this.didWarnMissingTarget = false;
     this.didWarnRawPointerUnavailable = false;
@@ -235,8 +240,9 @@ export class FollowCamera extends Script {
     this.clampElevation();
   }
 
-  postUpdate() {
+  postUpdate(dt) {
     if (!this.target) {
+      this.followedTarget = null;
       this.warnOnce(
         "didWarnMissingTarget",
         "Assign FollowCamera.target to CameraTarget.",
@@ -245,6 +251,23 @@ export class FollowCamera extends Script {
     }
 
     const targetPosition = this.target.getPosition();
+
+    // Smooth only the moving anchor; mouse-controlled yaw and elevation must
+    // remain immediate so camera-facing movement and combat stay responsive.
+    if (
+      this.followedTarget !== this.target ||
+      this.followPosition.distance(targetPosition) > 5 ||
+      this.followHalfLife <= 0
+    ) {
+      this.followPosition.copy(targetPosition);
+      this.followedTarget = this.target;
+    } else {
+      const blend = 1 - Math.pow(0.5, dt / this.followHalfLife);
+      this.followPosition.lerp(this.followPosition, targetPosition, blend);
+    }
+
+    // The target may change height even when there is no mouse input.
+    this.clampElevation(this.followPosition.y);
 
     const yawRadians = this.yaw * DEG_TO_RAD;
 
@@ -261,36 +284,36 @@ export class FollowCamera extends Script {
     );
 
     this.entity.setPosition(
-      targetPosition.x + this.offset.x,
+      this.followPosition.x + this.offset.x,
 
-      targetPosition.y + this.offset.y,
+      this.followPosition.y + this.offset.y,
 
-      targetPosition.z + this.offset.z,
+      this.followPosition.z + this.offset.z,
     );
 
-    this.entity.lookAt(targetPosition);
+    this.entity.lookAt(this.followPosition);
   }
 
-  clampElevation() {
+  clampElevation(targetY) {
     this.elevation = Math.max(
-      this.getGroundLimitedMinElevation(),
+      this.getGroundLimitedMinElevation(targetY),
 
       Math.min(this.maxElevation, this.elevation),
     );
   }
 
-  getGroundLimitedMinElevation() {
+  getGroundLimitedMinElevation(targetY) {
     if (!this.target || this.distance <= 0) {
       return -89.5;
     }
 
-    const targetY = this.target.getPosition().y;
+    const anchorY = targetY ?? this.target.getPosition().y;
 
     const normalizedOffsetY = Math.max(
       -1,
       Math.min(
         1,
-        (this.groundY + this.groundClearance - targetY) / this.distance,
+        (this.groundY + this.groundClearance - anchorY) / this.distance,
       ),
     );
 
