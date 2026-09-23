@@ -20,7 +20,12 @@ export class CombatDamageResolver extends Script {
   }
 
   onWeaponHit(target, direction, hitInfo) {
-    if (!target) {
+    const damageTarget = this.resolveDamageTarget(target);
+
+    if (!damageTarget) {
+      console.warn(
+        `[CombatDamage] unresolved target=${target?.name ?? "missing"}`,
+      );
       return;
     }
 
@@ -30,11 +35,35 @@ export class CombatDamageResolver extends Script {
       return;
     }
 
-    target.fire("damage:apply", damage, this.entity, direction, hitInfo);
+    damageTarget.fire(
+      "damage:apply",
+      damage,
+      this.entity,
+      direction,
+      hitInfo,
+    );
 
     console.log(
-      `[CombatDamage] direction=${direction} target=${target.name} amount=${damage}`,
+      `[CombatDamage] direction=${direction} target=${damageTarget.name} amount=${damage}`,
     );
+  }
+
+  resolveDamageTarget(target) {
+    if (!target) {
+      return null;
+    }
+
+    const hurtbox = target.script?.combatHurtbox;
+
+    if (hurtbox?.ownerEntity) {
+      return hurtbox.ownerEntity;
+    }
+
+    if (target.script?.damageable) {
+      return target;
+    }
+
+    return null;
   }
 
   getDamageForDirection(direction) {
