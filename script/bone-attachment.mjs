@@ -1,4 +1,4 @@
-import { Script, Entity, Quat } from "playcanvas";
+import { Script, Entity } from "playcanvas";
 
 export class BoneAttachment extends Script {
   static scriptName = "boneAttachment";
@@ -24,47 +24,36 @@ export class BoneAttachment extends Script {
       return;
     }
 
-    // The Editor-authored socket transform is the canonical grip used by idle,
-    // cuts and overhead attacks. Temporary combat corrections are always
-    // composed on top of this transform and then restored afterwards.
+    // The Editor-authored socket transform is the canonical grip for every
+    // attack. Authored animation owns hand / wrist motion; runtime code must
+    // not add thrust-specific position or rotation corrections on top.
     this.baseSocketPosition = this.weaponSocket.getLocalPosition().clone();
     this.baseSocketRotation = this.weaponSocket.getLocalRotation().clone();
     this.baseSocketScale = this.weaponSocket.getLocalScale().clone();
 
-    this.entity.on("weapon:pose", this.onWeaponPose, this);
+    // The new thrust clip starts in its authored chamber pose. The combat
+    // controller historically froze thrust later in the old clip, so force the
+    // hold point back to the beginning until the legacy editor attribute is
+    // removed from combat-controller.mjs.
+    const combatController = this.findCombatController();
+
+    if (combatController) {
+      combatController.thrustChamberProgress = 0;
+    }
+
+    // Ignore legacy weapon:pose events. They were introduced to compensate for
+    // the previous thrust animation and would now double-adjust a correct clip.
     this.entity.on("weapon:clearPose", this.onClearWeaponPose, this);
   }
 
-  onWeaponPose(
-    _positionX,
-    _positionY,
-    _positionZ,
-    rotationX,
-    rotationY,
-    rotationZ,
-  ) {
-    // The old combat controller still emits weapon:pose for both thrust and
-    // left attacks. The left animation is now authored correctly in Blender,
-    // so only retain the one justified runtime exception: thrust grip rotation.
-    if (this.getCurrentAttackDirection() !== "thrust") {
-      return;
-    }
-
-    this.applyThrustRotationOffset(rotationX, rotationY, rotationZ);
-  }
-
-  onClearWeaponPose() {
-    this.restoreWeaponSocketBase();
-  }
-
-  getCurrentAttackDirection() {
+  findCombatController() {
     let current = this.entity;
 
     while (current) {
       const controller = current.script?.combatController;
 
       if (controller) {
-        return controller.currentAttackDirection ?? null;
+        return controller;
       }
 
       current = current.parent;
@@ -73,27 +62,8 @@ export class BoneAttachment extends Script {
     return null;
   }
 
-  applyThrustRotationOffset(rotationX = 0, rotationY = 0, rotationZ = 0) {
-    if (!this.restoreWeaponSocketBase()) {
-      return false;
-    }
-
-    // Do not apply the old per-thrust position offset. Position is owned by the
-    // canonical socket plus the animated hand. Only the local grip orientation
-    // gets a temporary thrust-specific correction.
-    const localOffsetRotation = new Quat().setFromEulerAngles(
-      rotationX,
-      rotationY,
-      rotationZ,
-    );
-
-    const composedRotation = this.baseSocketRotation
-      .clone()
-      .mul(localOffsetRotation);
-
-    this.weaponSocket.setLocalRotation(composedRotation);
-
-    return true;
+  onClearWeaponPose() {
+    this.restoreWeaponSocketBase();
   }
 
   restoreWeaponSocketBase() {
@@ -113,14 +83,14 @@ export class BoneAttachment extends Script {
       return;
     }
 
-    // Follow the animated hand in world space. WeaponSocket_R remains local to
-    // this anchor, so the Blender wrist motion still owns attack trajectory.
+    // Follow the animated hand in world space. WeaponSocket_R stays at its
+    // canonical local transform, so the authored hand animation owns the full
+    // attack trajectory and orientation.
     this.entity.setPosition(this.target.getPosition());
     this.entity.setRotation(this.target.getRotation());
   }
 
   destroy() {
-    this.entity.off("weapon:pose", this.onWeaponPose, this);
     this.entity.off("weapon:clearPose", this.onClearWeaponPose, this);
   }
 }
