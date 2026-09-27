@@ -1,4 +1,23 @@
-import { Script, Asset, ANIM_BLEND_2D_DIRECTIONAL } from "playcanvas";
+import {
+  Script,
+  Asset,
+  AnimCurve,
+  AnimEvents,
+  AnimTrack,
+  ANIM_BLEND_2D_DIRECTIONAL,
+} from "playcanvas";
+
+const COMBAT_TRACK_VERSION = "filtered-unmasked-v1";
+const COMBAT_LEG_BONES = new Set([
+  "mixamorig:LeftUpLeg",
+  "mixamorig:LeftLeg",
+  "mixamorig:LeftFoot",
+  "mixamorig:LeftToeBase",
+  "mixamorig:RightUpLeg",
+  "mixamorig:RightLeg",
+  "mixamorig:RightFoot",
+  "mixamorig:RightToeBase",
+]);
 
 export class LocomotionAnimator extends Script {
   static scriptName = "locomotionAnimator";
@@ -91,6 +110,11 @@ export class LocomotionAnimator extends Script {
         "LocomotionAnimator requires an Anim Component on the same entity.",
       );
     }
+
+    // Base and Combat are intentionally not normalized. The Combat layer is an
+    // overwrite layer, and normalizing both non-zero weights can expose imported
+    // skeleton scale transforms during the handoff.
+    anim.normalizeWeights = false;
 
     this.validateAssets();
 
@@ -311,13 +335,24 @@ export class LocomotionAnimator extends Script {
     layer.assignAnimation("Locomotion.StrafeRight", this.strafeRight.resource);
     layer.assignAnimation("Jump", this.jump.resource);
 
-    combatLayer.assignAnimation("CombatIdle", this.idle.resource);
+    // Keep the Combat layer unmasked so Hips -> Spine -> Head/arms evaluate in
+    // the same hierarchy as the authored attack. Instead, remove leg and scale
+    // curves from the Combat tracks themselves. The Base layer therefore keeps
+    // driving the leg chains while chambering/moving, without the mask-induced
+    // upper-body pose distortion seen on thrust/stab/magic clips.
+    combatLayer.assignAnimation(
+      "CombatIdle",
+      this.createCombatTrack(this.idle.resource),
+    );
 
     for (const attack of availableAttacks) {
-      combatLayer.assignAnimation(attack.state, attack.asset.resource);
+      combatLayer.assignAnimation(
+        attack.state,
+        this.createCombatTrack(attack.asset.resource),
+      );
     }
 
-    this.configureCombatMask(combatLayer);
+    combatLayer.mask = null;
     combatLayer.weight = 0;
     layer.weight = 1;
 
@@ -327,20 +362,62 @@ export class LocomotionAnimator extends Script {
       );
     }
 
-    console.log("[Anim] Combat layer playable: true");
+    console.log(
+      `[Anim] Combat layer playable: true (${COMBAT_TRACK_VERSION})`,
+    );
   }
 
-  configureCombatMask(combatLayer) {
-    const combatMaskPath =
-      "RootNode/mixamorig:Hips/mixamorig:Spine";
+  createCombatTrack(track) {
+    const curves = [];
 
-    combatLayer.mask = {
-      [combatMaskPath]: {
-        children: true,
-      },
-    };
+    for (const curve of track.curves ?? []) {
+      const sourcePaths = curve.paths ?? [];
+      const paths = sourcePaths.filter(
+        (path) => !this.shouldExcludeCombatPath(path),
+      );
 
-    console.log(`[CombatMask] ${Object.keys(combatLayer.mask)[0]}`);
+      if (paths.length === 0) {
+        continue;
+      }
+
+      if (paths.length === sourcePaths.length) {
+        curves.push(curve);
+      } else {
+        curves.push(
+          new AnimCurve(paths, curve.input, curve.output, curve.interpolation),
+        );
+      }
+    }
+
+    return new AnimTrack(
+      `${track.name}-combat`,
+      track.duration,
+      track.inputs,
+      track.outputs,
+      curves,
+      new AnimEvents(track.events ?? []),
+    );
+  }
+
+  shouldExcludeCombatPath(path) {
+    if (typeof path === "string") {
+      const parts = path.split("/");
+
+      return (
+        parts.includes("localScale") ||
+        parts.some((part) => COMBAT_LEG_BONES.has(part))
+      );
+    }
+
+    const entityPath = Array.isArray(path?.entityPath) ? path.entityPath : [];
+    const propertyPath = Array.isArray(path?.propertyPath)
+      ? path.propertyPath
+      : [];
+
+    return (
+      propertyPath.includes("localScale") ||
+      entityPath.some((part) => COMBAT_LEG_BONES.has(part))
+    );
   }
 
   validateAssets() {
