@@ -7,7 +7,7 @@ import {
   ANIM_BLEND_2D_DIRECTIONAL,
 } from "playcanvas";
 
-const COMBAT_TRACK_VERSION = "filtered-unmasked-v1";
+const COMBAT_TRACK_VERSION = "filtered-unmasked-v2";
 const COMBAT_LEG_BONES = new Set([
   "mixamorig:LeftUpLeg",
   "mixamorig:LeftLeg",
@@ -336,10 +336,11 @@ export class LocomotionAnimator extends Script {
     layer.assignAnimation("Jump", this.jump.resource);
 
     // Keep the Combat layer unmasked so Hips -> Spine -> Head/arms evaluate in
-    // the same hierarchy as the authored attack. Instead, remove leg and scale
-    // curves from the Combat tracks themselves. The Base layer therefore keeps
-    // driving the leg chains while chambering/moving, without the mask-induced
-    // upper-body pose distortion seen on thrust/stab/magic clips.
+    // the same hierarchy as the authored attack. Instead, remove leg curves,
+    // imported scale curves, and Hips translation from the Combat tracks.
+    // Base locomotion therefore keeps the grounded pelvis position and leg
+    // chains while Combat preserves the attack-authored pelvis rotation and
+    // complete upper-body hierarchy.
     combatLayer.assignAnimation(
       "CombatIdle",
       this.createCombatTrack(this.idle.resource),
@@ -402,9 +403,12 @@ export class LocomotionAnimator extends Script {
   shouldExcludeCombatPath(path) {
     if (typeof path === "string") {
       const parts = path.split("/");
+      const property = parts.at(-1);
+      const targetsHips = parts.includes("mixamorig:Hips");
 
       return (
-        parts.includes("localScale") ||
+        property === "localScale" ||
+        (targetsHips && property === "localPosition") ||
         parts.some((part) => COMBAT_LEG_BONES.has(part))
       );
     }
@@ -413,9 +417,11 @@ export class LocomotionAnimator extends Script {
     const propertyPath = Array.isArray(path?.propertyPath)
       ? path.propertyPath
       : [];
+    const targetsHips = entityPath.includes("mixamorig:Hips");
 
     return (
       propertyPath.includes("localScale") ||
+      (targetsHips && propertyPath.includes("localPosition")) ||
       entityPath.some((part) => COMBAT_LEG_BONES.has(part))
     );
   }

@@ -113,6 +113,10 @@ export class PlayerController extends Script {
     this.animMoveX = 0;
     this.animMoveZ = 0;
 
+    // While a chamber is held without movement input, keep the Base locomotion
+    // layer on one pose so Idle breathing does not keep moving the legs.
+    this.chamberLocomotionHoldTime = null;
+
     this.entity.on("combat:faceView", this.onCombatFaceView, this);
   }
 
@@ -158,6 +162,11 @@ export class PlayerController extends Script {
       inputX /= inputLength;
       inputZ /= inputLength;
     }
+
+    const combatController = this.getCombatController();
+    const chamberHolding = Boolean(combatController?.chamberHolding);
+
+    this.updateChamberLocomotionHold(chamberHolding, hasMovementInput);
 
     const jumpPressed = keyboard.wasPressed(KEY_SPACE);
 
@@ -220,8 +229,12 @@ export class PlayerController extends Script {
     // ANIMATION TARGET
     // ----------------------------
 
-    const targetAnimX = inputX * 2;
-    const targetAnimZ = inputZ * 2;
+    // Physical movement remains fully diagonal, but until diagonal locomotion
+    // clips exist, W/S owns the visual locomotion pose whenever either is held.
+    // A short A/D tap therefore cannot leave the body leaning in a strafe pose
+    // while the player is still primarily walking forward/backward.
+    const targetAnimX = Math.abs(inputZ) > 0.01 ? 0 : inputX;
+    const targetAnimZ = inputZ;
 
     // ----------------------------
     // SMOOTH BLEND PARAMETERS
@@ -248,6 +261,32 @@ export class PlayerController extends Script {
     this.facingYaw = this.normalizeYaw(this.getViewYaw());
     this.updateFacingAxes();
     this.updateVisualFacing();
+  }
+
+  getCombatController() {
+    const scripts = this.entity.script;
+
+    return scripts?.combatController ?? scripts?.get?.("combatController");
+  }
+
+  updateChamberLocomotionHold(chamberHolding, hasMovementInput) {
+    const baseLayer = this.visual?.anim?.baseLayer;
+
+    if (
+      !chamberHolding ||
+      hasMovementInput ||
+      !baseLayer ||
+      baseLayer.activeState !== "Locomotion"
+    ) {
+      this.chamberLocomotionHoldTime = null;
+      return;
+    }
+
+    if (this.chamberLocomotionHoldTime === null) {
+      this.chamberLocomotionHoldTime = baseLayer.activeStateCurrentTime;
+    }
+
+    baseLayer.activeStateCurrentTime = this.chamberLocomotionHoldTime;
   }
 
   checkGrounded() {
