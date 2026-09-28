@@ -229,12 +229,13 @@ export class PlayerController extends Script {
     // ANIMATION TARGET
     // ----------------------------
 
-    // Physical movement remains fully diagonal, but until diagonal locomotion
-    // clips exist, W/S owns the visual locomotion pose whenever either is held.
-    // A short A/D tap therefore cannot leave the body leaning in a strafe pose
-    // while the player is still primarily walking forward/backward.
-    const targetAnimX = Math.abs(inputZ) > 0.01 ? 0 : inputX;
-    const targetAnimZ = inputZ;
+    // Physical movement remains fully diagonal. Visually, any active A/D input
+    // uses the strafe clip, including diagonals; releasing A/D immediately
+    // targets W/S walk again. This makes quick lateral taps flash the strafe
+    // pose without leaving the character stuck in it afterward.
+    const hasStrafeInput = Math.abs(inputX) > 0.01;
+    const targetAnimX = hasStrafeInput ? Math.sign(inputX) : 0;
+    const targetAnimZ = hasStrafeInput ? 0 : inputZ;
 
     // ----------------------------
     // SMOOTH BLEND PARAMETERS
