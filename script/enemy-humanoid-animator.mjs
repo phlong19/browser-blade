@@ -160,10 +160,6 @@ export class EnemyHumanoidAnimator extends Script {
     }
 
     layer.weight = 1;
-
-    console.log(
-      `[EnemyAnim] ${this.entity.name} ready hit=${hasHitReaction} death=${hasDeath}`,
-    );
   }
 
   validateRequiredAsset(name, asset) {

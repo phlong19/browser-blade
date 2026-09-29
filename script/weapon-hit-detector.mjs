@@ -1,7 +1,6 @@
-import { Color, Script, Entity, Vec3 } from "playcanvas";
+import { Script, Entity, Vec3 } from "playcanvas";
 
 const WEAPON_HIT_DETECTOR_VERSION = "timed-window-v2";
-const ACTIVE_BLADE_DEBUG_COLOR = new Color(1, 0.8, 0);
 
 export class WeaponHitDetector extends Script {
   static scriptName = "weaponHitDetector";
@@ -33,9 +32,6 @@ export class WeaponHitDetector extends Script {
 
     console.log(
       `[WeaponHitDetectorVersion] ${WEAPON_HIT_DETECTOR_VERSION}`,
-    );
-    console.log(
-      `[WeaponHitDetector:init] base=${this.bladeBase?.name ?? "missing"} tip=${this.bladeTip?.name ?? "missing"} owner=${this.ownerEntity?.name ?? "missing"} samples=${this.getSampleCount()}`,
     );
 
     if (!this.hasBladeMarkers()) {
@@ -72,19 +68,8 @@ export class WeaponHitDetector extends Script {
 
     if (!this.sweepActive) {
       this.syncSamplePositions();
-
       return;
     }
-
-    const basePosition = this.bladeBase.getPosition();
-    const tipPosition = this.bladeTip.getPosition();
-
-    this.app.drawLine(
-      basePosition,
-      tipPosition,
-      ACTIVE_BLADE_DEBUG_COLOR,
-      false,
-    );
 
     this.populateCurrentSamplePositions();
 
@@ -185,16 +170,6 @@ export class WeaponHitDetector extends Script {
     const hitInfo = this.createHitInfo(acceptedHit, zone);
 
     this.hitEntities.add(target);
-
-    const progress = this.entity.script?.combatController?.currentAttackProgress;
-    const progressSuffix = Number.isFinite(progress)
-      ? ` progress=${progress.toFixed(3)}`
-      : "";
-    const zoneSuffix = zone ? ` zone=${zone}` : "";
-
-    console.log(
-      `[WeaponHit] direction=${this.activeAttackDirection} target=${target.name}${zoneSuffix}${progressSuffix}`,
-    );
 
     this.entity.fire(
       "combat:weaponHit",

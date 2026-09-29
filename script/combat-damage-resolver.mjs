@@ -42,10 +42,6 @@ export class CombatDamageResolver extends Script {
       direction,
       hitInfo,
     );
-
-    console.log(
-      `[CombatDamage] direction=${direction} target=${damageTarget.name} amount=${damage}`,
-    );
   }
 
   resolveDamageTarget(target) {

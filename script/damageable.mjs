@@ -18,15 +18,7 @@ export class Damageable extends Script {
       return;
     }
 
-    const maxHealth = this.getMaxHealth();
-
     this.currentHealth = Math.max(0, this.currentHealth - amount);
-
-    const zoneSuffix = hitInfo?.zone ? ` zone=${hitInfo.zone}` : "";
-
-    console.log(
-      `[Damageable] target=${this.entity.name} damage=${amount} health=${this.currentHealth}/${maxHealth} direction=${direction}${zoneSuffix}`,
-    );
 
     this.entity.fire("damage:taken", amount, source, direction, hitInfo);
 
@@ -36,7 +28,6 @@ export class Damageable extends Script {
 
     this.isDepleted = true;
     this.entity.fire("damage:depleted", source, direction, hitInfo);
-    console.log(`[Damageable] target=${this.entity.name} depleted`);
   }
 
   getMaxHealth() {

@@ -57,8 +57,6 @@ export class DeathController extends Script {
       this.disablePhysics();
     }
 
-    const zoneSuffix = hitInfo?.zone ? ` zone=${hitInfo.zone}` : "";
-    console.log(`[Death] target=${this.entity.name} direction=${direction}${zoneSuffix}`);
     this.entity.fire("death:started", source, direction, hitInfo);
   }
 

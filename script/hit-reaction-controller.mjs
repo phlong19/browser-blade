@@ -48,11 +48,6 @@ export class HitReactionController extends Script {
     if (this.hitTrigger) {
       anim.setTrigger(this.hitTrigger);
     }
-
-    const zoneSuffix = hitInfo?.zone ? ` zone=${hitInfo.zone}` : "";
-    console.log(
-      `[HitReaction] target=${this.entity.name} damage=${amount} direction=${direction}${zoneSuffix}`,
-    );
   }
 
   getAnim() {
