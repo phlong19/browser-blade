@@ -102,6 +102,14 @@ export class LocomotionAnimator extends Script {
    */
   attackThrust;
 
+  /**
+   * @attribute
+   * @title Block Vs Overhead
+   * @type {Asset}
+   * @resource animation
+   */
+  blockOverhead;
+
   initialize() {
     const anim = this.entity.anim;
 
@@ -147,6 +155,7 @@ export class LocomotionAnimator extends Script {
     const availableAttacks = attackDefinitions.filter(
       ({ asset }) => !!asset?.resource,
     );
+    const hasBlockOverhead = Boolean(this.blockOverhead?.resource);
 
     const states = [
       {
@@ -302,6 +311,20 @@ export class LocomotionAnimator extends Script {
       };
     }
 
+    if (hasBlockOverhead) {
+      combatStates.push({
+        name: "BlockOverhead",
+        speed: 1,
+        loop: false,
+      });
+      combatTransitions.push({
+        from: "BlockOverhead",
+        to: "CombatIdle",
+        time: 0.1,
+        exitTime: 0.95,
+      });
+    }
+
     anim.loadStateGraph({
       layers: [
         {
@@ -336,11 +359,10 @@ export class LocomotionAnimator extends Script {
     layer.assignAnimation("Jump", this.jump.resource);
 
     // Keep the Combat layer unmasked so Hips -> Spine -> Head/arms evaluate in
-    // the same hierarchy as the authored attack. Instead, remove leg curves,
-    // imported scale curves, and Hips translation from the Combat tracks.
+    // the same hierarchy as the authored combat motion. Instead, remove leg
+    // curves, imported scale curves, and Hips translation from Combat tracks.
     // Base locomotion therefore keeps the grounded pelvis position and leg
-    // chains while Combat preserves the attack-authored pelvis rotation and
-    // complete upper-body hierarchy.
+    // chains while Combat preserves authored pelvis rotation and upper body.
     combatLayer.assignAnimation(
       "CombatIdle",
       this.createCombatTrack(this.idle.resource),
@@ -350,6 +372,13 @@ export class LocomotionAnimator extends Script {
       combatLayer.assignAnimation(
         attack.state,
         this.createCombatTrack(attack.asset.resource),
+      );
+    }
+
+    if (hasBlockOverhead) {
+      combatLayer.assignAnimation(
+        "BlockOverhead",
+        this.createCombatTrack(this.blockOverhead.resource),
       );
     }
 
