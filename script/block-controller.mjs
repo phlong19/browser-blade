@@ -22,7 +22,9 @@ export class BlockController extends Script {
 
   initialize() {
     this.blocking = false;
+    this.blockDirection = null;
     this.blockHoldTime = null;
+    this.blockInputArmed = true;
     this.returningToIdle = false;
     this.didWarnMissingState = false;
   }
@@ -37,23 +39,38 @@ export class BlockController extends Script {
 
     this.finishReturnToIdle(layer);
 
-    const wantsOverheadBlock =
+    const rmbHeld =
       Mouse.isPointerLocked() &&
-      this.app.mouse.isPressed(MOUSEBUTTON_RIGHT) &&
-      combatController?.state === "idle" &&
-      combatController?.selectedDirection === "overhead";
+      this.app.mouse.isPressed(MOUSEBUTTON_RIGHT);
 
-    if (wantsOverheadBlock) {
-      if (!this.blocking) {
-        this.beginOverheadBlock(layer);
+    if (!rmbHeld) {
+      this.blockInputArmed = true;
+    }
+
+    if (this.blocking) {
+      if (!rmbHeld) {
+        this.endBlock(layer);
+        return;
+      }
+
+      if (combatController?.state !== "idle") {
+        this.yieldBlockToCombat();
+        return;
       }
 
       this.pinOverheadBlock(layer);
       return;
     }
 
-    if (this.blocking) {
-      this.endBlock(layer);
+    const wantsOverheadBlock =
+      this.blockInputArmed &&
+      rmbHeld &&
+      combatController?.state === "idle" &&
+      combatController?.selectedDirection === "overhead";
+
+    if (wantsOverheadBlock) {
+      this.beginOverheadBlock(layer);
+      this.pinOverheadBlock(layer);
     }
   }
 
@@ -88,6 +105,7 @@ export class BlockController extends Script {
     }
 
     this.blocking = true;
+    this.blockDirection = "overhead";
     this.returningToIdle = false;
     this.blockHoldTime = null;
 
@@ -118,18 +136,40 @@ export class BlockController extends Script {
     layer.activeStateCurrentTime = this.blockHoldTime;
   }
 
+  interruptBlock(reason = "interrupted") {
+    if (!this.blocking) {
+      return;
+    }
+
+    this.blockInputArmed = false;
+
+    const combatController = this.getCombatController();
+    const layer = this.getCombatLayer(combatController);
+
+    this.endBlock(layer);
+  }
+
+  yieldBlockToCombat() {
+    this.blocking = false;
+    this.blockDirection = null;
+    this.blockHoldTime = null;
+    this.blockInputArmed = false;
+    this.returningToIdle = false;
+  }
+
   endBlock(layer) {
     this.blocking = false;
+    this.blockDirection = null;
     this.blockHoldTime = null;
 
-    if (layer.states.includes("CombatIdle")) {
+    if (layer?.states.includes("CombatIdle")) {
       this.returningToIdle = true;
       layer.transition("CombatIdle", this.releaseBlendTime);
       return;
     }
 
     this.returningToIdle = false;
-    layer.blendToWeight(0, this.releaseBlendTime);
+    layer?.blendToWeight(0, this.releaseBlendTime);
   }
 
   finishReturnToIdle(layer) {
@@ -150,7 +190,9 @@ export class BlockController extends Script {
     const layer = this.getCombatLayer(combatController);
 
     this.blocking = false;
+    this.blockDirection = null;
     this.blockHoldTime = null;
+    this.blockInputArmed = true;
     this.returningToIdle = false;
 
     if (layer?.states.includes("CombatIdle")) {
