@@ -110,6 +110,14 @@ export class LocomotionAnimator extends Script {
    */
   blockOverhead;
 
+  /**
+   * @attribute
+   * @title Block Vs Left
+   * @type {Asset}
+   * @resource animation
+   */
+  blockLeft;
+
   initialize() {
     const anim = this.entity.anim;
 
@@ -156,6 +164,7 @@ export class LocomotionAnimator extends Script {
       ({ asset }) => !!asset?.resource,
     );
     const hasBlockOverhead = Boolean(this.blockOverhead?.resource);
+    const hasBlockLeft = Boolean(this.blockLeft?.resource);
 
     const states = [
       {
@@ -325,6 +334,20 @@ export class LocomotionAnimator extends Script {
       });
     }
 
+    if (hasBlockLeft) {
+      combatStates.push({
+        name: "BlockLeft",
+        speed: 1,
+        loop: false,
+      });
+      combatTransitions.push({
+        from: "BlockLeft",
+        to: "CombatIdle",
+        time: 0.1,
+        exitTime: 0.95,
+      });
+    }
+
     anim.loadStateGraph({
       layers: [
         {
@@ -379,6 +402,13 @@ export class LocomotionAnimator extends Script {
       combatLayer.assignAnimation(
         "BlockOverhead",
         this.createCombatTrack(this.blockOverhead.resource),
+      );
+    }
+
+    if (hasBlockLeft) {
+      combatLayer.assignAnimation(
+        "BlockLeft",
+        this.createCombatTrack(this.blockLeft.resource),
       );
     }
 

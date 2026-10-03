@@ -5,6 +5,19 @@ import {
   MOUSEBUTTON_RIGHT,
 } from "playcanvas";
 
+const BLOCKS = {
+  overhead: {
+    state: "BlockOverhead",
+    holdProgressKey: "overheadHoldProgress",
+    assetTitle: "Block Vs Overhead",
+  },
+  left: {
+    state: "BlockLeft",
+    holdProgressKey: "leftHoldProgress",
+    assetTitle: "Block Vs Left",
+  },
+};
+
 export class BlockController extends Script {
   static scriptName = "blockController";
 
@@ -14,7 +27,10 @@ export class BlockController extends Script {
   /** Normalized BlockOverhead progress at which a held RMB pins the guard pose. @attribute @type {number} */
   overheadHoldProgress = 0.9;
 
-  /** Seconds used to blend from CombatIdle into BlockOverhead. @attribute @type {number} */
+  /** Normalized BlockLeft progress at which a held RMB pins the guard pose. @attribute @type {number} */
+  leftHoldProgress = 0.9;
+
+  /** Seconds used to blend from CombatIdle into a directional block. @attribute @type {number} */
   blockBlendTime = 0.08;
 
   /** Seconds used to blend back to CombatIdle on RMB release. @attribute @type {number} */
@@ -26,7 +42,7 @@ export class BlockController extends Script {
     this.blockHoldTime = null;
     this.blockInputArmed = true;
     this.returningToIdle = false;
-    this.didWarnMissingState = false;
+    this.warnedMissingStates = new Set();
   }
 
   update() {
@@ -58,19 +74,21 @@ export class BlockController extends Script {
         return;
       }
 
-      this.pinOverheadBlock(layer);
+      this.pinCurrentBlock(layer);
       return;
     }
 
-    const wantsOverheadBlock =
+    const direction = combatController?.selectedDirection;
+    const block = direction ? BLOCKS[direction] : null;
+    const wantsBlock =
       this.blockInputArmed &&
       rmbHeld &&
       combatController?.state === "idle" &&
-      combatController?.selectedDirection === "overhead";
+      Boolean(block);
 
-    if (wantsOverheadBlock) {
-      this.beginOverheadBlock(layer);
-      this.pinOverheadBlock(layer);
+    if (wantsBlock) {
+      this.beginBlock(layer, direction);
+      this.pinCurrentBlock(layer);
     }
   }
 
@@ -93,36 +111,48 @@ export class BlockController extends Script {
     return this.getAnim(combatController)?.findAnimationLayer("Combat") ?? null;
   }
 
-  beginOverheadBlock(layer) {
-    if (!layer.states.includes("BlockOverhead")) {
-      if (!this.didWarnMissingState) {
-        this.didWarnMissingState = true;
+  beginBlock(layer, direction) {
+    const block = BLOCKS[direction];
+
+    if (!block) {
+      return;
+    }
+
+    if (!layer.states.includes(block.state)) {
+      if (!this.warnedMissingStates.has(block.state)) {
+        this.warnedMissingStates.add(block.state);
         console.warn(
-          "[Block] BlockOverhead is unavailable. Assign Block Vs Overhead on LocomotionAnimator.",
+          `[Block] ${block.state} is unavailable. Assign ${block.assetTitle} on LocomotionAnimator.`,
         );
       }
       return;
     }
 
     this.blocking = true;
-    this.blockDirection = "overhead";
+    this.blockDirection = direction;
     this.returningToIdle = false;
     this.blockHoldTime = null;
 
     layer.blendToWeight(1, this.blockBlendTime);
     this.entity.fire("combat:faceView");
-    layer.transition("BlockOverhead", this.blockBlendTime);
+    layer.transition(block.state, this.blockBlendTime);
   }
 
-  pinOverheadBlock(layer) {
-    if (!this.blocking || layer.activeState !== "BlockOverhead") {
+  pinCurrentBlock(layer) {
+    const block = this.blockDirection ? BLOCKS[this.blockDirection] : null;
+
+    if (!this.blocking || !block || layer.activeState !== block.state) {
       return;
     }
 
     const progress = layer.activeStateProgress;
+    const rawHoldProgress = this[block.holdProgressKey];
     const holdProgress = Math.min(
       0.94,
-      Math.max(0, Number.isFinite(this.overheadHoldProgress) ? this.overheadHoldProgress : 0.9),
+      Math.max(
+        0,
+        Number.isFinite(rawHoldProgress) ? rawHoldProgress : 0.9,
+      ),
     );
 
     if (this.blockHoldTime === null) {
