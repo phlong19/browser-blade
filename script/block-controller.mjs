@@ -1,9 +1,4 @@
-import {
-  Script,
-  Entity,
-  Mouse,
-  MOUSEBUTTON_RIGHT,
-} from "playcanvas";
+import { Script, Entity, Mouse, MOUSEBUTTON_RIGHT } from "playcanvas";
 
 const BLOCKS = {
   overhead: {
@@ -27,8 +22,8 @@ export class BlockController extends Script {
   /** Normalized BlockOverhead progress at which a held RMB pins the guard pose. @attribute @type {number} */
   overheadHoldProgress = 0.9;
 
-  /** Normalized BlockLeft progress at which a held RMB pins the guard pose. @attribute @type {number} */
-  leftHoldProgress = 0.9;
+  /** Normalized BlockLeft progress at which a held RMB pins the guard pose. The current baked clip reaches its guard early. @attribute @type {number} */
+  leftHoldProgress = 0.3;
 
   /** Seconds used to blend from CombatIdle into a directional block. @attribute @type {number} */
   blockBlendTime = 0.08;
@@ -56,8 +51,7 @@ export class BlockController extends Script {
     this.finishReturnToIdle(layer);
 
     const rmbHeld =
-      Mouse.isPointerLocked() &&
-      this.app.mouse.isPressed(MOUSEBUTTON_RIGHT);
+      Mouse.isPointerLocked() && this.app.mouse.isPressed(MOUSEBUTTON_RIGHT);
 
     if (!rmbHeld) {
       this.blockInputArmed = true;
@@ -149,10 +143,7 @@ export class BlockController extends Script {
     const rawHoldProgress = this[block.holdProgressKey];
     const holdProgress = Math.min(
       0.94,
-      Math.max(
-        0,
-        Number.isFinite(rawHoldProgress) ? rawHoldProgress : 0.9,
-      ),
+      Math.max(0, Number.isFinite(rawHoldProgress) ? rawHoldProgress : 0.9),
     );
 
     if (this.blockHoldTime === null) {

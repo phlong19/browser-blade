@@ -7,7 +7,7 @@ import {
   ANIM_BLEND_2D_DIRECTIONAL,
 } from "playcanvas";
 
-const COMBAT_TRACK_VERSION = "filtered-unmasked-v2";
+const COMBAT_TRACK_VERSION = "left-block";
 const COMBAT_LEG_BONES = new Set([
   "mixamorig:LeftUpLeg",
   "mixamorig:LeftLeg",
@@ -326,12 +326,6 @@ export class LocomotionAnimator extends Script {
         speed: 1,
         loop: false,
       });
-      combatTransitions.push({
-        from: "BlockOverhead",
-        to: "CombatIdle",
-        time: 0.1,
-        exitTime: 0.95,
-      });
     }
 
     if (hasBlockLeft) {
@@ -339,12 +333,6 @@ export class LocomotionAnimator extends Script {
         name: "BlockLeft",
         speed: 1,
         loop: false,
-      });
-      combatTransitions.push({
-        from: "BlockLeft",
-        to: "CombatIdle",
-        time: 0.1,
-        exitTime: 0.95,
       });
     }
 
